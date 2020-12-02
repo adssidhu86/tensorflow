@@ -1,20 +1,26 @@
 # Description:
 #   OpKernels for boosted trees ops.
 
+load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
+load(
+    "//tensorflow:tensorflow.bzl",
+    "tf_cc_test",
+)
+load("//tensorflow:tensorflow.bzl", "tf_kernel_library")
+load(
+    "//tensorflow/core/platform:build_config.bzl",
+    "tf_proto_library",
+)
+
 package(
     default_visibility = [
         "//tensorflow:__subpackages__",
         "//tensorflow:internal",
     ],
+    licenses = ["notice"],  # Apache 2.0
 )
 
-licenses(["notice"])  # Apache 2.0
-
-load("//tensorflow:tensorflow.bzl", "tf_kernel_library")
-load(
-    "//tensorflow/core:platform/default/build_config.bzl",
-    "tf_proto_library",
-)
+exports_files(["quantile_ops.cc"])
 
 tf_proto_library(
     name = "boosted_trees_proto",
@@ -29,12 +35,12 @@ tf_kernel_library(
     name = "prediction_ops",
     srcs = ["prediction_ops.cc"],
     deps = [
+        ":boosted_trees_proto_cc",
         ":resource_ops",
         ":resources",
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
-        "//tensorflow/core/kernels/boosted_trees:boosted_trees_proto_cc",
     ],
 )
 
@@ -43,6 +49,7 @@ cc_library(
     srcs = ["resources.cc"],
     hdrs = ["resources.h"],
     deps = [
+        ":tree_helper",
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
         "//tensorflow/core/kernels/boosted_trees:boosted_trees_proto_cc",
@@ -52,16 +59,36 @@ cc_library(
 cc_library(
     name = "tree_helper",
     hdrs = ["tree_helper.h"],
+    deps = [
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
+        "//third_party/eigen3",
+    ],
+)
+
+tf_cc_test(
+    name = "tree_helper_test",
+    srcs = ["tree_helper_test.cc"],
+    deps = [
+        ":tree_helper",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
+        "//tensorflow/core:test",
+        "//tensorflow/core:test_main",
+        "//tensorflow/core:testlib",
+        "//third_party/eigen3",
+    ],
 )
 
 tf_kernel_library(
     name = "resource_ops",
     srcs = ["resource_ops.cc"],
     deps = [
+        ":boosted_trees_proto_cc",
         ":resources",
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
-        "//tensorflow/core/kernels/boosted_trees:boosted_trees_proto_cc",
+        "//tensorflow/core:lib_internal",
     ],
 )
 
@@ -69,9 +96,11 @@ tf_kernel_library(
     name = "stats_ops",
     srcs = ["stats_ops.cc"],
     deps = [
+        ":boosted_trees_proto_cc",
         ":tree_helper",
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
+        "//third_party/eigen3",
     ],
 )
 
@@ -79,11 +108,13 @@ tf_kernel_library(
     name = "training_ops",
     srcs = ["training_ops.cc"],
     deps = [
+        ":boosted_trees_proto_cc",
         ":resources",
         ":tree_helper",
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
-        "//tensorflow/core/kernels/boosted_trees:boosted_trees_proto_cc",
+        "//tensorflow/core:lib_internal",
+        "//third_party/eigen3",
     ],
 )
 
@@ -93,6 +124,7 @@ tf_kernel_library(
     deps = [
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
+        "//tensorflow/core:lib_internal",
         "//tensorflow/core/kernels/boosted_trees/quantiles:weighted_quantiles",
     ],
 )

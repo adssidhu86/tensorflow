@@ -14,6 +14,7 @@ limitations under the License.
 ==============================================================================*/
 
 #include "tensorflow/compiler/xla/service/cpu/cpu_compiler.h"
+#include "tensorflow/compiler/xla/service/cpu/test_target_triple_helper.h"
 #include "tensorflow/compiler/xla/service/cpu/tests/cpu_codegen_test.h"
 #include "tensorflow/compiler/xla/service/hlo_parser.h"
 
@@ -56,15 +57,16 @@ ENTRY main {
 )";
 
   string filecheck_pattern = R"(
-CHECK: private constant [48 x i8]
-CHECK-NOT: private constant [48 x i8]
+CHECK: private unnamed_addr constant [48 x i8]
+CHECK-NOT: private unnamed_addr constant [48 x i8]
 )";
 
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(hlo_text));
 
   CpuAotCompilationOptions options{
-      /*triple=*/"x86_64-pc-linux", /*cpu_name=*/"", /*features=*/"",
+      /*triple=*/kTargetTripleForHost, /*cpu_name=*/kTargetCpuForHost,
+      /*features=*/"",
       /*entry_point_name=*/"entry",
       /*relocation_model=*/CpuAotCompilationOptions::RelocationModel::Static};
 
@@ -102,17 +104,18 @@ ENTRY main {
 )";
 
   string filecheck_pattern = R"(
-CHECK-DAG: private constant [4 x i8]
-CHECK-DAG: private constant [8 x i8]
-CHECK-NOT: private constant [4 x i8]
-CHECK-NOT: private constant [8 x i8]
+CHECK-DAG: private unnamed_addr constant [4 x i8]
+CHECK-DAG: private unnamed_addr constant [8 x i8]
+CHECK-NOT: private unnamed_addr constant [4 x i8]
+CHECK-NOT: private unnamed_addr constant [8 x i8]
 )";
 
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(hlo_text));
 
   CpuAotCompilationOptions options{
-      /*triple=*/"x86_64-pc-linux", /*cpu_name=*/"", /*features=*/"",
+      /*triple=*/kTargetTripleForHost, /*cpu_name=*/kTargetCpuForHost,
+      /*features=*/"",
       /*entry_point_name=*/"entry",
       /*relocation_model=*/CpuAotCompilationOptions::RelocationModel::Static};
 

@@ -12,13 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Logical operators, including comparison and bool operators."""
+"""Logical boolean operators: not, and, or."""
 
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
-import operator
 
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.ops import control_flow_ops
@@ -28,7 +26,17 @@ from tensorflow.python.ops import gen_math_ops
 def not_(a):
   """Functional form of "not"."""
   if tensor_util.is_tensor(a):
-    return gen_math_ops.logical_not(a)
+    return _tf_not(a)
+  return _py_not(a)
+
+
+def _tf_not(a):
+  """Implementation of the "not_" operator for TensorFlow."""
+  return gen_math_ops.logical_not(a)
+
+
+def _py_not(a):
+  """Default Python implementation of the "not_" operator."""
   return not a
 
 
@@ -37,7 +45,7 @@ def and_(a, b):
   a_val = a()
   if tensor_util.is_tensor(a_val):
     return _tf_lazy_and(a_val, b)
-  return a_val and b()
+  return _py_lazy_and(a_val, b)
 
 
 def _tf_lazy_and(cond, b):
@@ -46,12 +54,17 @@ def _tf_lazy_and(cond, b):
   return control_flow_ops.cond(cond, b, lambda: cond)
 
 
+def _py_lazy_and(cond, b):
+  """Lazy-eval equivalent of "and" in Python."""
+  return cond and b()
+
+
 def or_(a, b):
   """Functional form of "or". Uses lazy evaluation semantics."""
   a_val = a()
   if tensor_util.is_tensor(a_val):
     return _tf_lazy_or(a_val, b)
-  return a_val or b()
+  return _py_lazy_or(a_val, b)
 
 
 def _tf_lazy_or(cond, b):
@@ -60,11 +73,16 @@ def _tf_lazy_or(cond, b):
   return control_flow_ops.cond(cond, lambda: cond, b)
 
 
+def _py_lazy_or(cond, b):
+  """Lazy-eval equivalent of "or" in Python."""
+  return cond or b()
+
+
 def eq(a, b):
   """Functional form of "equal"."""
   if tensor_util.is_tensor(a) or tensor_util.is_tensor(b):
     return _tf_equal(a, b)
-  return a == b
+  return _py_equal(a, b)
 
 
 def _tf_equal(a, b):
@@ -72,33 +90,11 @@ def _tf_equal(a, b):
   return gen_math_ops.equal(a, b)
 
 
+def _py_equal(a, b):
+  """Overload of "equal" that falls back to Python's default implementation."""
+  return a == b
+
+
 def not_eq(a, b):
   """Functional form of "not-equal"."""
   return not_(eq(a, b))
-
-
-# Default implementation for the remainings.
-
-is_ = operator.is_
-is_not = operator.is_not
-
-
-def in_(a, b):
-  """Functional form of "less-than"."""
-  # TODO(mdan): in and not_in should probably be convertible for some types.
-  return a in b
-
-
-def not_in(a, b):
-  """Functional form of "less-than"."""
-  return a not in b
-
-gt = operator.gt
-gt_e = operator.ge
-lt = operator.lt
-lt_e = operator.le
-
-
-u_add = operator.pos
-u_sub = operator.neg
-invert = operator.invert

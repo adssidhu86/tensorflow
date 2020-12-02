@@ -36,7 +36,12 @@ namespace xla {
 // represent the runtime real size of those dynamic dimensions.
 class DynamicDimensionInference {
  public:
-  static StatusOr<DynamicDimensionInference> Run(HloModule* module);
+  using CustomCallInferenceHandler =
+      std::function<Status(HloInstruction*, DynamicDimensionInference*)>;
+
+  static StatusOr<DynamicDimensionInference> Run(
+      HloModule* module,
+      CustomCallInferenceHandler custom_call_handler = nullptr);
 
   string ToString() const;
 
@@ -46,10 +51,35 @@ class DynamicDimensionInference {
   HloInstruction* GetDynamicSize(HloInstruction* inst, const ShapeIndex& index,
                                  int64 dim) const;
 
+  // Returns dynamic sizes of all dimensions of `inst`'s leaf node at `index`.
+  // Static sizes are represented by nullptr.
+  std::vector<HloInstruction*> GetDynamicSizes(HloInstruction* inst,
+                                               const ShapeIndex& index) const;
+
+  // Returns if current instruction contains any dynamic dimension.
+  // Recursively go into tuples.
+  bool HasDynamicDimension(HloInstruction* inst) const;
+
+  // Forward dynamic dimension size at `dim` from `inst` to `new_inst`.
+  Status ForwardDynamicSize(HloInstruction* inst, HloInstruction* new_inst,
+                            const ShapeIndex& index);
+
+  // Update the dynamic mapping so that we know dimension `dim` of instruction
+  // `inst` at `index` has a dynamic size, and its runtime size is represented
+  // by a scalar instruction `size`.
+  void SetDynamicSize(HloInstruction* inst, const ShapeIndex& index, int64 dim,
+                      HloInstruction* size);
+
+  // For all tensors whose dynamic dimension is `replace`, replace them with
+  // `with`.
+  void ReplaceAllDynamicDimensionUsesWith(HloInstruction* replace,
+                                          HloInstruction* with);
+
   friend class DynamicDimensionInferenceVisitor;
 
  private:
-  explicit DynamicDimensionInference(HloModule* module);
+  explicit DynamicDimensionInference(
+      HloModule* module, CustomCallInferenceHandler custom_call_handler);
 
   // DynamicDimension is used as a key in the dynamic key-value mapping. It
   // unambiguously represents a dynamic dimension of a instruction at a given
@@ -78,16 +108,6 @@ class DynamicDimensionInference {
     }
   };
 
-  // Update the dynamic mapping so that we know dimension `dim` of instruction
-  // `inst` at `index` has a dynamic size, and its runtime size is represented
-  // by a scalar instruction `size`.
-  void SetDynamicSize(HloInstruction* inst, const ShapeIndex& index, int64 dim,
-                      HloInstruction* size) {
-    dynamic_mapping_.try_emplace(DynamicDimension{inst, index, dim}, size);
-    auto iter = per_hlo_dynamic_dimensions_.try_emplace(inst);
-    iter.first->second.emplace(DynamicDimension{inst, index, dim});
-  }
-
   // Copies the internal mapping from instruction `from` to instruction `to`.
   // This is useful when an instruction is replaced by the other during the
   // inferencing process.
@@ -112,6 +132,9 @@ class DynamicDimensionInference {
       absl::flat_hash_map<HloInstruction*,
                           absl::flat_hash_set<DynamicDimension>>;
   PerHloDynamicDimensions per_hlo_dynamic_dimensions_;
+
+  // A handler for custom calls.
+  CustomCallInferenceHandler custom_call_handler_;
 };
 
 }  // namespace xla

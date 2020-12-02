@@ -15,8 +15,9 @@ limitations under the License.
 
 #include "tensorflow/compiler/tf2tensorrt/utils/trt_logger.h"
 
-#if GOOGLE_CUDA
-#if GOOGLE_TENSORRT
+#if GOOGLE_CUDA && GOOGLE_TENSORRT
+#include "tensorflow/compiler/tf2tensorrt/common/utils.h"
+#include "tensorflow/compiler/tf2tensorrt/convert/logger_registry.h"
 #include "tensorflow/core/platform/logging.h"
 
 namespace tensorflow {
@@ -26,12 +27,15 @@ namespace tensorrt {
 void Logger::log(Severity severity, const char* msg) {
   // Suppress info-level messages
   switch (severity) {
+#if NV_TENSORRT_MAJOR > 5 || (NV_TENSORRT_MAJOR == 5 && NV_TENSORRT_MINOR >= 1)
+    case Severity::kVERBOSE:
+#endif
     case Severity::kINFO: {  // Mark TRT info messages as debug!
       VLOG(2) << name_ << " " << msg;
       break;
     }
     case Severity::kWARNING: {
-      LOG(WARNING) << name_ << " " << msg;
+      LOG_WARNING_WITH_PREFIX << name_ << " " << msg;
       break;
     }
     case Severity::kERROR: {
@@ -45,13 +49,22 @@ void Logger::log(Severity severity, const char* msg) {
     // This is useless for now. But would catch it in future if enum changes. It
     // is always good to have default case!
     default: {
-      LOG(FATAL) << name_ << "Got unknown severity level from TRT " << msg;
+      LOG(FATAL) << name_ << "Got unknown severity level " << int(severity)
+                 << " from TensorRT: " << msg;
       break;
     }
   }
 }
+
+// static
+Logger* Logger::GetLogger() {
+  static Logger* logger = new Logger("DefaultLogger");
+  return logger;
+}
+
+REGISTER_TENSORRT_LOGGER("DefaultLogger", Logger::GetLogger());
+
 }  // namespace tensorrt
 }  // namespace tensorflow
 
-#endif  // GOOGLE_CUDA
-#endif  // GOOGLE_TENSORRT
+#endif  // GOOGLE_CUDA && GOOGLE_TENSORRT

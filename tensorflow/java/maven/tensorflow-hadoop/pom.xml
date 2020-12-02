@@ -5,7 +5,7 @@
     <groupId>org.tensorflow</groupId>
     <artifactId>tensorflow-hadoop</artifactId>
     <packaging>jar</packaging>
-    <version>1.13.0-rc0</version>
+    <version>1.15.0</version>
     <name>tensorflow-hadoop</name>
     <url>https://www.tensorflow.org</url>
     <description>TensorFlow TFRecord InputFormat/OutputFormat for Apache Hadoop</description>
@@ -16,7 +16,7 @@
         <maven.compiler.target>1.6</maven.compiler.target>
         <hadoop.version>2.6.0</hadoop.version>
         <protobuf.version>3.5.1</protobuf.version>
-        <junit.version>4.11</junit.version>
+        <junit.version>4.13.1</junit.version>
     </properties>
 
     <licenses>

@@ -29,12 +29,13 @@ limitations under the License.
 syntax = "proto3";
 
 package xla;
+
 import "tensorflow/compiler/xla/xla_data.proto";
 
 option cc_enable_arenas = true;
 
 // Serialization of HloInstruction.
-// Next ID: 59
+// Next ID: 76
 message HloInstructionProto {
   reserved 10;
   reserved "parameter_name";
@@ -48,6 +49,12 @@ message HloInstructionProto {
   reserved "called_computation_names";
   reserved 44;
   reserved "replica_group_ids";
+  // Use backend_config instead for custom_call_opaque.
+  reserved 53;
+  reserved "custom_call_opaque";
+  // Use backend_config instead for all_reduce_barrier.
+  reserved 46;
+  reserved "all_reduce_barrier";
 
   string name = 1;
   string opcode = 2;
@@ -119,8 +126,9 @@ message HloInstructionProto {
   // Only present for kBatchNormTraining.
   int64 feature_index = 25;
 
-  // Represents a unique identifier for each Send/Recv instruction pair.
-  // Only present for kSend or kRecv.
+  // Represents a unique identifier for each Send/Recv instruction pair or
+  // optionally for collective instructions (AllReduce, CollectivePermute,
+  // AllToAll). Non-positive channel_id is equivalent to no channel id.
   int64 channel_id = 26;
 
   // The string representation of the infeed configuration.
@@ -129,9 +137,6 @@ message HloInstructionProto {
   // Name of a external target (eg, global symbol) to call, only present for
   // kCustomCall.
   string custom_call_target = 28;
-
-  // Opaque string, only present for kCustomCall.
-  string custom_call_opaque = 53;
 
   // Shape of outfeed request.
   xla.ShapeProto outfeed_shape = 29;
@@ -144,6 +149,9 @@ message HloInstructionProto {
 
   // FFT length.
   repeated int64 fft_length = 32;
+
+  // Comparison direction only used for kCompare.
+  string comparison_direction = 63;
 
   // Gather dimension numbers.
   xla.GatherDimensionNumbers gather_dimension_numbers = 33;
@@ -163,17 +171,25 @@ message HloInstructionProto {
   xla.OpSharding sharding = 40;
 
   // Backend configuration for the instruction. Has backend-specific meaning.
-  string backend_config = 43;
+  bytes backend_config = 43;
 
   // Cross replica op fields.
   repeated ReplicaGroup replica_groups = 49;
-  int64 all_reduce_id = 45;
-  string all_reduce_barrier = 46;
+  // Deprecated, but keeping it for backward compatibility. Use channel_id.
+  // Non-positive all_reduce_id is equivalent to no all_reduce_id.
+  int64 all_reduce_id = 45 [deprecated = true];
+
+  // If true, interprets ids in ReplicaGroup as global device ids, which is
+  // a linearized id of `replica_id * partition_count + partition_id`.
+  bool use_global_device_ids = 71;
 
   // Whether this Send/Recv instruction transfers data to/from the host. Only
   // present for Send and Recv instructions and their SendDone and RecvDone
   // partners.
   bool is_host_transfer = 47;
+
+  // Whether this Sort instruction should be stable.
+  bool is_stable = 60;
 
   xla.ScatterDimensionNumbers scatter_dimension_numbers = 48;
 
@@ -193,6 +209,59 @@ message HloInstructionProto {
   // operand.
   bool constrain_layout = 56;
   repeated xla.ShapeProto operand_shapes_with_layout = 57;
+
+  // Options for TriangularSolve
+  xla.TriangularSolveOptions triangular_solve_options = 59;
+
+  // Options for Cholesky
+  xla.CholeskyOptions cholesky_options = 62;
+
+  // Describes how parameters behave with regards to replicas.
+  xla.ParameterReplication parameter_replication = 61;
+
+  // If set, the given instruction is run in parallel on e.g. multiple CPU
+  // cores.  The outermost dimension gets split up into
+  // outer_dimension_partitions[0] pieces, the next-outermost dim gets split
+  // into outer_dimension_partitions[1] pieces, etc.
+  //
+  // It's illegal to partition a dimension into more shards than there are
+  // elements in that dimension.
+  repeated int64 outer_dimension_partitions = 64;
+
+  // Whether the kCustomCall instruction has side-effects, only present for
+  // kCustomCall.
+  bool custom_call_has_side_effect = 65;
+
+  // A list of CustomCallOutputOperandAliasing pairs that specifies aliasing
+  // buffers between output and operands for kCustomCall.
+  repeated xla.CustomCallOutputOperandAliasing
+      custom_call_output_operand_aliasing = 74;
+
+  // The delta value for kRngGetAndUpdateState.
+  int64 delta = 66;
+
+  // Specifies if the gather/scatter indices are guaranteed to be sorted by the
+  // caller.
+  bool indices_are_sorted = 67;
+
+  // Frontend attributes to pass to the XLA backend.
+  xla.FrontendAttributes frontend_attributes = 68;
+
+  // Specifies if all elements updated are guaranteed to be unique by
+  // the caller.
+  bool unique_indices = 69;
+
+  // RNG algorithm used by kRngBitGenerator.
+  xla.RandomAlgorithm rng_algorithm = 70;
+
+  // The comparison type used for kCompare.
+  string comparison_type = 72;
+
+  // Specifies if this is a cross-program-prefetch, used by kCopyStart.
+  bool is_cross_program_prefetch = 73;
+
+  // If a convolution is dynamic, a dynamic padding type will be specified.
+  xla.PaddingType padding_type = 75;
 }
 
 // Serialization of HloComputation.
@@ -228,19 +297,17 @@ message HloScheduleProto {
   map<int64, InstructionSequence> sequences = 1;
 }
 
-message HloInputOutputAliasProto {
-  enum Kind {
-    // Define a UNDEFINED_ALIAS equal to zero to get around the default-0 proto3
-    // behavior and missing has_*() APIs.
-    UNDEFINED_ALIAS = 0;
-    // An alias setup by the user as must alias. A use setting USER_ALIAS is
-    // expecting the designed output to be dropped over the given input
-    // parameter number+index.
-    USER_ALIAS = 1;
-    // An alias setup by the compiler as part of its optimizations.
-    SYSTEM_ALIAS = 2;
-  }
+enum Kind {
+  // Define a UNDEFINED_ALIAS equal to zero to get around the default-0 proto3
+  // behavior and missing has_*() APIs.
+  UNDEFINED_ALIAS = 0;
+  // The buffers may or may not alias at runtime.
+  MAY_ALIAS = 1;
+  // The buffers must alias at runtime.
+  MUST_ALIAS = 2;
+}
 
+message HloInputOutputAliasProto {
   // The following proto describes a pair of aliased an input
   // (described by parameter number and a ShapeIndex of the parameter)
   // and an output (described by a ShapeIndex of the root
@@ -303,6 +370,11 @@ message DynamicParameterBindingProto {
   repeated Binding entries = 1;
 }
 
+message CrossProgramPrefetch {
+  int64 parameter = 1;
+  repeated int64 index = 2;
+}
+
 // Serialization of HloModule.
 message HloModuleProto {
   string name = 1;
@@ -326,6 +398,8 @@ message HloModuleProto {
   HloInputOutputAliasProto input_output_alias = 8;
 
   DynamicParameterBindingProto dynamic_parameter_binding = 9;
+
+  repeated CrossProgramPrefetch cross_program_prefetches = 10;
 }
 
 // Serialization of LogicalBuffer.
@@ -453,4 +527,68 @@ message HloSnapshot {
 
   // The name of the platform used to run the graph.
   string execution_platform = 4;
+}
+
+// Metadata for an HLO module. Dumped after HLO passes and before LLO lowering
+// with filename module_####.metadata.textproto, where #### is
+// canonical_module_id.
+message HloModuleMetadataProto {
+  // Uniquely identifies an HloModuleMetadata. Equal to the first unique_id
+  // of the module (a module may go through multiple unique_ids). If a module
+  // is partitioned into multiple modules, those modules will each have a new
+  // HloModuleMetadata with a different canonical_module_id.
+  int64 canonical_module_id = 1;
+
+  // Name of the module group that the module is part of.
+  string module_group_name = 2;
+
+  // The canonical module id of the module that this one is partitioned from,
+  // if applicable.
+  int64 original_module_id = 3;
+
+  // The canonical module ids of the modules that this one is partitioned into,
+  // if applicable.
+  repeated int64 partitioned_module_ids = 4;
+
+  // Metadata for the HLO passes that are run on the module.
+  repeated HloPassMetadata pass_metadata = 5;
+}
+
+// Metadata for one run of an HLO pass on a module. Provides more information
+// when processing debug dumps of HloProtos about the order of HLO passes and
+// various other stats like duration. `pass_id` may also be used to identify a
+// particular run of a pass in debug info that propagates through stages of
+// compilation.
+message HloPassMetadata {
+  // For a given module, pass_id uniquely identifies a run of an HLO pass on
+  // that module. Note that a pass_id may not always refer to the same pass
+  // because the order of passes during compilation may change. For finding
+  // metadata for a particular pass, pass_name and pipeline_name would be more
+  // reliable, although note that they may not be unique.
+  int64 pass_id = 1;
+  string pass_name = 2;
+  string pipeline_name = 3;
+
+  // Filenames of the dumps of the module after this pass ran. Module may be
+  // dumped in multiple formats, and the order of formats in this field will
+  // stay consistent across passes.
+  repeated string dump_filenames = 4;
+
+  // Return value of pass.Run(). True if this pass changed the module, or, in
+  // the case where the module was run through this pass as part of a module
+  // group, true if this pass changed any module in the same module group.
+  bool module_changed = 5;
+
+  // The unique_id of the module that this pass is run on. May be different from
+  // the canonical_module_id of the HloModuleMetadata that this HloPassMetadata
+  // is inside.
+  int64 module_id = 6;
+
+  // If the module went through this pass as part of a module group, this is
+  // set as the ids of all the modules in the module group. Empty otherwise.
+  repeated int64 module_group_module_ids = 7;
+
+  // Timestamp before and after the pass is run. Note they may be equal.
+  int64 start_timestamp_usec = 8;
+  int64 end_timestamp_usec = 9;
 }

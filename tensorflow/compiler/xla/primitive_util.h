@@ -45,7 +45,7 @@ const int kBFloat16MantissaBits = 7;
 template <typename NativeT>
 PrimitiveType NativeToPrimitiveType() {
   // Make the expression depend on the template parameter NativeT so
-  // that this compile-time error only apperas if this function is
+  // that this compile-time error only appears if this function is
   // instantiated with some concrete type that is not specialized
   // below.
   static_assert(!std::is_same<NativeT, NativeT>::value,
@@ -152,6 +152,8 @@ bool IsArrayType(PrimitiveType primitive_type);
 int BitWidth(PrimitiveType type);
 
 PrimitiveType UnsignedIntegralTypeForBitWidth(int64 src_bitwidth);
+
+PrimitiveType SignedIntegralTypeForBitWidth(int64 src_bitwidth);
 
 // Returns the real, imag component type underlying the given complex type.
 // LOG(FATAL)'s if complex_type is not complex.

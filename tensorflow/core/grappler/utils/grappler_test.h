@@ -18,6 +18,8 @@ limitations under the License.
 
 #include <vector>
 
+#include "absl/strings/string_view.h"
+#include "tensorflow/cc/framework/scope.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/types.h"
@@ -35,6 +37,9 @@ class GrapplerTest : public ::testing::Test {
   GrapplerTest();
 
  protected:
+  void DisableAllOptimizers();
+  void EnableAllOptimizers();
+
   std::vector<Tensor> EvaluateNodes(
       const GraphDef& graph, const std::vector<string>& node_names) const;
 
@@ -49,17 +54,19 @@ class GrapplerTest : public ::testing::Test {
                    const std::vector<std::pair<string, AttrValue>>& attributes,
                    GraphDef* graph) const;
 
+  void DisableAllOptimizers(RewriterConfig* cfg);
+
   // Checks if two graphs are equal. Both graphs must have the same set of nodes
   // with the same inputs and attributes. Nodes can be in different order.
   //
   // NOTE: This function uses EXPECT/ASSERT macros to check node properties
-  // equality, and adds all failuires to the current test.
+  // equality, and adds all failures to the current test.
   void CompareGraphs(GraphDef want, GraphDef got) const;
 
   // Checks if two nodes have the same name, op, inputs and attributes.
   //
   // NOTE: This function uses EXPECT/ASSERT macros to check node properties
-  // equality, and adds all failuires to the current test.
+  // equality, and adds all failures to the current test.
   void CompareNodes(const NodeDef& want, const NodeDef& got) const;
 
   // Checks if two functions are equal. Both functions must have the same set of
@@ -87,6 +94,15 @@ class GrapplerTest : public ::testing::Test {
     return tensor;
   }
 
+  // Creates a random tensor with given shape using `setRandom`.
+  template <DataType DTYPE>
+  Tensor GenerateTensorWithSetRandom(const TensorShape& shape) const {
+    typedef typename EnumToDataType<DTYPE>::Type T;
+    Tensor tensor(DTYPE, shape);
+    tensor.flat<T>().setRandom();
+    return tensor;
+  }
+
   // Get a constant tensor with given shape.
   template <DataType DTYPE>
   Tensor GenerateConstantTensor(
@@ -96,6 +112,10 @@ class GrapplerTest : public ::testing::Test {
     Tensor tensor(DTYPE, shape);
     for (auto i = 0; i < tensor.NumElements(); i++) tensor.flat<T>()(i) = value;
     return tensor;
+  }
+
+  inline tensorflow::Scope CreateScopeWithDevice(absl::string_view device) {
+    return tensorflow::Scope::NewRootScope().WithDevice(string(device));
   }
 
  private:

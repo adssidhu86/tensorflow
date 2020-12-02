@@ -25,6 +25,12 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
+struct OutfeedConfig {
+  Shape input_shape;
+};
+
+OutfeedConfig GetOutfeedConfig(const HloInstruction* instr);
+
 // A thunk that outfeeds data. Data must be already resident on the host. This
 // thunk performs a host to device copy from the buffer allocated for the
 // outfeed op to the host location.
@@ -32,17 +38,16 @@ class OutfeedThunk : public Thunk {
  public:
   // Constructs a OutfeedThunk that copies data to the host-side
   // outfeed queue from the buffers in the given shape tree.
-  OutfeedThunk(ShapeTree<BufferAllocation::Slice> outfeed_slices,
-               const HloInstruction* hlo_instruction);
+  OutfeedThunk(ThunkInfo thunk_info, OutfeedConfig&& config,
+               ShapeTree<BufferAllocation::Slice> outfeed_slices);
 
   OutfeedThunk(const OutfeedThunk&) = delete;
   OutfeedThunk& operator=(const OutfeedThunk&) = delete;
 
-  Status ExecuteOnStream(const BufferAllocations& buffer_allocations,
-                         se::Stream* stream,
-                         HloExecutionProfiler* profiler) override;
+  Status ExecuteOnStream(const ExecuteParams& params) override;
 
  private:
+  const OutfeedConfig config_;
   const ShapeTree<BufferAllocation::Slice> outfeed_slices_;
 };
 

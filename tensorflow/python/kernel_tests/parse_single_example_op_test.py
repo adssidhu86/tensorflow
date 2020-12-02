@@ -212,7 +212,7 @@ class ParseExampleTest(test.TestCase):
                 "a": parsing_ops.FixedLenFeature((1, 3), dtypes.float32)
             }
         },
-        # TODO(mrry): Consider matching the `tf.parse_example()` error message.
+        # TODO(mrry): Consider matching the `io.parse_example()` error message.
         expected_err=(errors_impl.OpError, "Key: a."))
 
   def testDenseDefaultNoShapeShouldFail(self):
@@ -774,7 +774,7 @@ class ParseExampleTest(test.TestCase):
                         (2, 1, 1), dtype=dtypes.string, allow_missing=True),
             }
         },
-        # TODO(mrry): Consider matching the `tf.parse_example()` error message.
+        # TODO(mrry): Consider matching the `io.parse_example()` error message.
         expected_err=(errors_impl.OpError, "Key: b."))
 
     self._test(
@@ -856,6 +856,7 @@ class ParseSingleExampleTest(test.TestCase):
                                                  expected_err[1]):
           out = parsing_ops.parse_single_example(**kwargs)
           sess.run(flatten_values_tensors_or_sparse(out.values()))
+        return
       else:
         # Returns dict w/ Tensors and SparseTensors.
         out = parsing_ops.parse_single_example(**kwargs)
@@ -938,6 +939,20 @@ class ParseSingleExampleTest(test.TestCase):
             }
         },
         expected_output)
+
+  def testExampleLongerThanSpec(self):
+    serialized = example(
+        features=features({
+            "a": bytes_feature([b"a", b"b"]),
+        })).SerializeToString()
+    self._test(
+        {
+            "serialized": ops.convert_to_tensor(serialized),
+            "features": {
+                "a": parsing_ops.FixedLenFeature(1, dtypes.string)
+            }
+        },
+        expected_err=(errors_impl.OpError, "Can't parse serialized Example"))
 
 
 if __name__ == "__main__":

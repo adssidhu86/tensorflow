@@ -206,7 +206,6 @@ class BatchNormalizationTest(test.TestCase):
                                   2)
 
   @test_util.run_deprecated_v1
-  @test_util.disable_xla("This test never passed for XLA")
   def testBatchNormGradImpl(self):
     x_shape = [7, 5, 4, 6]
     param_shape = [6]
@@ -296,8 +295,8 @@ class BatchNormalizationTest(test.TestCase):
                                                shift_after_normalization)
             tf_batch_norm, keep_dims_tf_batch_norm = sess.run(
                 [bn, keep_dims_bn])
-            self.assertEquals(x_shape, tf_batch_norm.shape)
-            self.assertEquals(x_shape, keep_dims_tf_batch_norm.shape)
+            self.assertEqual(x_shape, tf_batch_norm.shape)
+            self.assertEqual(x_shape, keep_dims_tf_batch_norm.shape)
             self.assertAllClose(
                 tf_batch_norm, keep_dims_tf_batch_norm, atol=0.000001)
 
@@ -329,8 +328,8 @@ class BatchNormalizationTest(test.TestCase):
                                               scale_after_normalization,
                                               shift_after_normalization)
             [tf_batch_norm] = self.evaluate([bn])
-            self.assertEquals(x_shape, np_batch_norm.shape)
-            self.assertEquals(x_shape, tf_batch_norm.shape)
+            self.assertEqual(x_shape, np_batch_norm.shape)
+            self.assertEqual(x_shape, tf_batch_norm.shape)
             self.assertAllClose(np_batch_norm, tf_batch_norm, atol=atol)
 
   def testBatchNormArbitraryShapes(self):
@@ -365,7 +364,7 @@ class SufficientStatisticsTest(test.TestCase):
       if d in set(axes):
         count *= x.shape[d]
     if not keep_dims:
-      shift = np.squeeze(shift, axis=axis)
+      shift = np.asarray(shift)
     return count, m_ss, v_ss, shift
 
   def _opSuffStats(self, x, axes, shift, keep_dims):

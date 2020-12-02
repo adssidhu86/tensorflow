@@ -23,6 +23,7 @@ import time
 import numpy as np
 
 from tensorflow.python.client import session
+from tensorflow.python.eager import context
 from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
@@ -30,11 +31,11 @@ from tensorflow.python.framework import tensor_shape
 from tensorflow.python.framework import test_util
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import gradients_impl
+from tensorflow.python.ops import resource_variable_ops
 from tensorflow.python.ops import variables
 from tensorflow.python.platform import test
 
 
-@test_util.disable_all_xla("This test never passed for XLA")
 class GatherNdTest(test.TestCase):
 
   def _testSimpleDtype(self, dtype):
@@ -57,7 +58,7 @@ class GatherNdTest(test.TestCase):
     self._testSimpleDtype("|S")  # byte strings in python2 + 3
 
   @test_util.run_deprecated_v1
-  @test_util.disable_xla("This test never passed for XLA")
+  @test_util.disable_xla("b/123337890")  # Error messages differ
   def testEmptyIndicesAndParamsOKButJustEmptyParamsFails(self):
     with self.session(use_gpu=True):
       params = np.ones((3, 3), dtype=np.float32)
@@ -204,6 +205,7 @@ class GatherNdTest(test.TestCase):
     self.assertEqual(None, tensor_shape.dimension_value(shape[0]))
 
   @test_util.run_deprecated_v1
+  @test_util.disable_xla("XLA does not have assertions in kernels.")
   def testBadIndicesCPU(self):
     with self.session(use_gpu=False):
       params = [0, 1, 2]
@@ -227,6 +229,7 @@ class GatherNdTest(test.TestCase):
         self.evaluate(gather_nd)
 
   @test_util.run_deprecated_v1
+  @test_util.disable_xla("XLA does not have assertions in kernels.")
   def testBadIndicesWithSlicesCPU(self):
     with self.session(use_gpu=False):
       params = [[0, 1, 2]]
@@ -272,7 +275,7 @@ class GatherNdTest(test.TestCase):
     expected_grads = np.array([[3, 4], [1, 2]], dtype=np.float64)
     with self.session(use_gpu=True):
       self.assertIndexedSlices(grads)
-      self.assertAllEqual(expected_grads, ops.convert_to_tensor(grads).eval())
+      self.assertAllEqual(expected_grads, ops.convert_to_tensor(grads))
 
   @test_util.run_deprecated_v1
   def testGradientsRank3Elements(self):
@@ -357,10 +360,30 @@ class GatherNdTest(test.TestCase):
         dtype=np.float64)
     with self.session(use_gpu=True):
       self.assertIndexedSlices(grads)
-      self.assertAllEqual(expected_grads, ops.convert_to_tensor(grads).eval())
+      self.assertAllEqual(expected_grads, ops.convert_to_tensor(grads))
+
+  @test_util.run_v1_only("RefVariable is not supported in v2")
+  def testGatherNdRefVariable(self):
+    with self.cached_session():
+      v = variables.RefVariable(constant_op.constant([[1, 2], [3, 4], [5, 6]]))
+      self.evaluate(variables.global_variables_initializer())
+      gather = array_ops.gather_nd(v, [[0, 1], [2, 0]])
+      if not context.executing_eagerly():  # .op doesn't make sense in Eager
+        self.assertEqual("GatherNd", gather.op.name)
+      self.assertAllEqual([2, 5], gather)
+
+  @test_util.run_in_graph_and_eager_modes
+  def testGatherNdResourceVariable(self):
+    with self.cached_session():
+      v = resource_variable_ops.ResourceVariable(
+          constant_op.constant([[1, 2], [3, 4], [5, 6]]))
+      self.evaluate(variables.global_variables_initializer())
+      gather = array_ops.gather_nd(v, [[0, 1], [2, 0]])
+      if not context.executing_eagerly():  # .op doesn't make sense in Eager
+        self.assertEqual("ResourceGatherNd", gather.op.inputs[0].op.type)
+      self.assertAllEqual([2, 5], gather)
 
 
-@test_util.disable_all_xla("This test never passed for XLA")
 class GatherNdOpBenchmark(test.Benchmark):
 
   def benchmark_gather_nd_op(self):
@@ -373,7 +396,7 @@ class GatherNdOpBenchmark(test.Benchmark):
       t_params = variables.Variable(params)
       t_indices = variables.Variable(indices)
       gather_op = array_ops.gather_nd(t_params, t_indices)
-      variables.global_variables_initializer().run()
+      self.evaluate(variables.global_variables_initializer())
       for _ in range(10):
         self.evaluate(gather_op)
       t1 = time.time()

@@ -16,6 +16,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/shape_util.h"
 
 #include <numeric>
+
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "tensorflow/compiler/xla/layout_util.h"
@@ -25,6 +26,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/types.h"
 #include "tensorflow/compiler/xla/util.h"
 #include "tensorflow/compiler/xla/xla_data.pb.h"
+#include "tensorflow/core/platform/test_benchmark.h"
 
 namespace xla {
 namespace {
@@ -176,6 +178,27 @@ TEST(ShapeUtilTest, UnequalIgnoringFpPrecision) {
       ShapeUtil::MakeShapeWithLayout(PRED, {4, 3}, {0, 1})));
 }
 
+TEST(ShapeUtilTest, EqualIgnoringElementType) {
+  EXPECT_TRUE(ShapeUtil::EqualIgnoringElementType(
+      ShapeUtil::MakeShapeWithLayout(F32, {4, 3}, {0, 1}),
+      ShapeUtil::MakeShapeWithLayout(F16, {4, 3}, {0, 1})));
+  EXPECT_TRUE(ShapeUtil::EqualIgnoringElementType(
+      ShapeUtil::MakeShapeWithLayout(S32, {4, 3}, {0, 1}),
+      ShapeUtil::MakeShapeWithLayout(F16, {4, 3}, {0, 1})));
+  EXPECT_TRUE(ShapeUtil::EqualIgnoringElementType(
+      ShapeUtil::MakeShapeWithLayout(F32, {4, 3}, {0, 1}),
+      ShapeUtil::MakeShapeWithLayout(PRED, {4, 3}, {0, 1})));
+}
+
+TEST(ShapeUtilTest, UnequalIgnoringElementType) {
+  EXPECT_FALSE(ShapeUtil::EqualIgnoringElementType(
+      ShapeUtil::MakeShapeWithLayout(F32, {4, 3}, {0, 1}),
+      ShapeUtil::MakeShapeWithLayout(F16, {3, 4}, {0, 1})));
+  EXPECT_FALSE(ShapeUtil::EqualIgnoringElementType(
+      ShapeUtil::MakeShapeWithLayout(F32, {3, 4}, {0, 1}),
+      ShapeUtil::MakeShapeWithLayout(F16, {3, 4}, {1, 0})));
+}
+
 TEST(ShapeUtilTest, EqualDynamicShapes) {
   EXPECT_TRUE(
       ShapeUtil::Equal(ShapeUtil::MakeShape(F32, {4, 3}, {true, false}),
@@ -195,7 +218,7 @@ TEST(ShapeUtilTest, CompatibleDynamicShapes) {
 
   EXPECT_TRUE(ShapeUtil::Compatible(shape_a, shape_a));
   EXPECT_TRUE(ShapeUtil::Compatible(shape_a, shape_b));
-  EXPECT_FALSE(ShapeUtil::Compatible(shape_a, shape_c));
+  EXPECT_TRUE(ShapeUtil::Compatible(shape_a, shape_c));
 }
 
 TEST(ShapeUtilTest, CompatibleTuples) {
@@ -710,6 +733,15 @@ TEST(ShapeUtilTest, PermuteDimensionsLayout) {
   } while (std::next_permutation(layout.begin(), layout.end()));
 }
 
+TEST(ShapeUtilTest, UpdateDynamicDimensions) {
+  Shape shape = ShapeUtil::MakeShape(F32, {10, 100, 1000});
+
+  Shape tuple_shape = ShapeUtil::MakeTupleShape({shape});
+
+  ShapeUtil::UpdateDynamicDimension(&tuple_shape, {0}, 1, true);
+  EXPECT_TRUE(ShapeUtil::GetSubshape(tuple_shape, {0}).is_dynamic_dimension(1));
+}
+
 TEST(ShapeUtilTest, PermuteDynamicDimensions) {
   Shape shape =
       ShapeUtil::MakeShape(F32, {10, 100, 1000},
@@ -761,8 +793,15 @@ TEST(AlignmentTest, AlignLayoutsWithTrivialDimensions) {
   auto aligned_shape = ShapeUtil::AlignLayouts(
       input, ShapeUtil::MakeShape(xla::F32, {1, 4, 1, 3, 2, 7, 5, 11, 1}));
   EXPECT_TRUE(aligned_shape);
-  EXPECT_THAT(aligned_shape.value().layout().minor_to_major(),
-              ElementsAre(6, 5, 4, 3, 1, 7, 0, 2, 8));
+  EXPECT_TRUE(ShapeUtil::ReshapeIsBitcast(input, aligned_shape.value()));
+}
+
+TEST(AlignmentTest, AlignLayoutsWithAllTrivialDimensions) {
+  Shape input =
+      ShapeUtil::MakeShapeWithLayout(xla::F32, {1, 1, 1, 1}, {0, 1, 3, 2});
+  auto aligned_shape = ShapeUtil::AlignLayouts(
+      input, ShapeUtil::MakeShape(xla::F32, {1, 1, 1, 1, 1}));
+  EXPECT_TRUE(aligned_shape);
   EXPECT_TRUE(ShapeUtil::ReshapeIsBitcast(input, aligned_shape.value()));
 }
 
@@ -788,6 +827,20 @@ TEST(AlignmentTest,
       input, ShapeUtil::MakeShape(xla::F32, {4, 3, 2, 5, 77}));
   EXPECT_FALSE(aligned_shape);
 }
+
+void BM_MakeShape(::testing::benchmark::State& state) {
+  for (auto s : state) {
+    ShapeUtil::MakeShape(F32, {2});
+  }
+}
+BENCHMARK(BM_MakeShape);
+
+void BM_MakeValidatedShape(::testing::benchmark::State& state) {
+  for (auto s : state) {
+    ShapeUtil::MakeValidatedShape(F32, {2}).ValueOrDie();
+  }
+}
+BENCHMARK(BM_MakeValidatedShape);
 
 }  // namespace
 }  // namespace xla

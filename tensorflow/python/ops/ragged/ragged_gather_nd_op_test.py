@@ -28,12 +28,11 @@ from tensorflow.python.framework import test_util
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops.ragged import ragged_factory_ops
 from tensorflow.python.ops.ragged import ragged_gather_ops
-from tensorflow.python.ops.ragged import ragged_test_util
 from tensorflow.python.platform import googletest
 
 
 @test_util.run_all_in_graph_and_eager_modes
-class RaggedGatherNdOpTest(ragged_test_util.RaggedTensorTestCase,
+class RaggedGatherNdOpTest(test_util.TensorFlowTestCase,
                            parameterized.TestCase):
 
   DOCSTRING_PARAMS = [[['000', '001'], ['010']],
@@ -202,7 +201,7 @@ class RaggedGatherNdOpTest(ragged_test_util.RaggedTensorTestCase,
   ])  # pyformat: disable
   def testRaggedGatherNd(self, descr, params, indices, expected):
     result = ragged_gather_ops.gather_nd(params, indices)
-    self.assertRaggedEqual(result, expected)
+    self.assertAllEqual(result, expected)
 
   def testRaggedGatherNdUnknownRankError(self):
     if context.executing_eagerly():
@@ -211,10 +210,10 @@ class RaggedGatherNdOpTest(ragged_test_util.RaggedTensorTestCase,
     indices1 = array_ops.placeholder(dtypes.int32, shape=None)
     indices2 = array_ops.placeholder(dtypes.int32, shape=[None])
 
-    with self.assertRaisesRegexp(ValueError,
-                                 'indices.rank be statically known.'):
+    with self.assertRaisesRegex(ValueError,
+                                'indices.rank be statically known.'):
       ragged_gather_ops.gather_nd(params, indices1)
-    with self.assertRaisesRegexp(
+    with self.assertRaisesRegex(
         ValueError, r'indices.shape\[-1\] must be statically known.'):
       ragged_gather_ops.gather_nd(params, indices2)
 
@@ -237,7 +236,7 @@ class RaggedGatherNdOpTest(ragged_test_util.RaggedTensorTestCase,
                                     indices,
                                     message=None,
                                     error=ValueError):
-    with self.assertRaisesRegexp(error, message):
+    with self.assertRaisesRegex(error, message):
       ragged_gather_ops.gather_nd(params, indices)
 
 

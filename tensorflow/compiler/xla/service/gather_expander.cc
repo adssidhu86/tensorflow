@@ -112,6 +112,14 @@ static StatusOr<HloInstruction*> ExpandIndexVectorIntoOperandSpace(
     int64 operand_rank) {
   HloComputation* computation = index_vector->parent();
   const Shape& index_shape = index_vector->shape();
+
+  if (operand_rank == 0) {
+    // This is Gather from a scalar. So, the index vector in operand space must
+    // be a zero-sized vector.
+    return computation->AddInstruction(HloInstruction::CreateConstant(
+        LiteralUtil::CreateFromDimensions(index_shape.element_type(), {0})));
+  }
+
   HloInstruction* zero =
       computation->AddInstruction(HloInstruction::CreateConstant(
           LiteralUtil::CreateFromDimensions(index_shape.element_type(), {1})));
@@ -261,6 +269,22 @@ static StatusOr<HloInstruction*> PermuteBatchAndOffsetDims(
   return MakeTransposeHlo(accumulator, permutation);
 }
 
+// Computes how many trips a loop implementing this gather op would take.
+static int64 GatherLoopTripCount(HloInstruction* gather_instr) {
+  HloInstruction* start_indices = gather_instr->mutable_operand(1);
+  const Shape& start_indices_shape = start_indices->shape();
+  const GatherDimensionNumbers& dim_numbers =
+      gather_instr->gather_dimension_numbers();
+
+  int64 trip_count = 1;
+  for (int64 i = 0, e = start_indices_shape.dimensions_size(); i < e; i++) {
+    if (i != dim_numbers.index_vector_dim()) {
+      trip_count *= start_indices_shape.dimensions(i);
+    }
+  }
+  return trip_count;
+}
+
 // High Level Algorithm
 //
 // We follow the following steps in sequence:
@@ -296,27 +320,20 @@ static StatusOr<HloInstruction*> PermuteBatchAndOffsetDims(
 // [3,1] out of operand into an accumulator of shape [4,3,1].  We then
 // reshape this result to [2,2,3] and finally transpose it to [2,3,2].
 
-StatusOr<HloInstruction*> GatherExpander::ExpandGather(
+StatusOr<HloInstruction*> GatherExpander::ExpandInstruction(
     HloInstruction* gather_instr) {
   CHECK(!ShapeUtil::IsZeroElementArray(gather_instr->shape()));
 
   HloComputation* computation = gather_instr->parent();
   HloInstruction* operand = gather_instr->mutable_operand(0);
   HloInstruction* start_indices = gather_instr->mutable_operand(1);
-  const Shape& start_indices_shape = start_indices->shape();
   const Shape& output_shape = gather_instr->shape();
   int64 output_rank = output_shape.dimensions_size();
 
   const GatherDimensionNumbers& dim_numbers =
       gather_instr->gather_dimension_numbers();
 
-  int64 gather_loop_trip_count = 1;
-  for (int64 i = 0, e = start_indices_shape.dimensions_size(); i < e; i++) {
-    if (i != dim_numbers.index_vector_dim()) {
-      gather_loop_trip_count *= start_indices_shape.dimensions(i);
-    }
-  }
-
+  int64 gather_loop_trip_count = GatherLoopTripCount(gather_instr);
   if (!IsInt32(gather_loop_trip_count)) {
     return Unimplemented(
         "Gather operations with more than 2147483647 gather indices are not "
@@ -361,25 +378,15 @@ StatusOr<HloInstruction*> GatherExpander::ExpandGather(
                                    output_rank);
 }
 
-StatusOr<bool> GatherExpander::Run(HloModule* module) {
-  auto is_nontrivial_gather = [](HloInstruction* inst) {
-    return inst->opcode() == HloOpcode::kGather &&
-           // Avoid expanding gather ops that produce zero sized tensors,
-           // instead punt these to ZeroSizedHloElimination.
-           !ShapeUtil::IsZeroElementArray(inst->shape());
-  };
-
-  std::vector<HloInstruction*> gather_instrs;
-  for (HloComputation* computation : module->MakeNonfusionComputations()) {
-    absl::c_copy_if(computation->instructions(),
-                    std::back_inserter(gather_instrs), is_nontrivial_gather);
-  }
-
-  for (HloInstruction* inst : gather_instrs) {
-    TF_ASSIGN_OR_RETURN(HloInstruction * expanded_root, ExpandGather(inst));
-    TF_RETURN_IF_ERROR(inst->parent()->ReplaceInstruction(inst, expanded_root));
-  }
-
-  return !gather_instrs.empty();
+bool GatherExpander::InstructionMatchesPattern(HloInstruction* inst) {
+  return inst->opcode() == HloOpcode::kGather &&
+         // Avoid expanding gather ops that produce zero sized tensors,
+         // instead punt these to ZeroSizedHloElimination.
+         !ShapeUtil::IsZeroElementArray(inst->shape()) &&
+         // In kEliminateSimpleGathers mode, we only simplify instructions
+         // which can be represented without a loop -- i.e. we only simplify
+         // gathers which have a trip count of 1.
+         (mode_ == kEliminateAllGathers || GatherLoopTripCount(inst) == 1);
 }
+
 }  // namespace xla

@@ -14,6 +14,8 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/lite/optional_debug_tools.h"
 
+#include "tensorflow/lite/c/common.h"
+#include "tensorflow/lite/schema/schema_generated.h"
 namespace tflite {
 
 void PrintIntVector(const std::vector<int>& v) {
@@ -48,6 +50,8 @@ const char* TensorTypeName(TfLiteType type) {
       return "kTfLiteInt8";
     case kTfLiteInt64:
       return "kTfLiteInt64";
+    case kTfLiteUInt64:
+      return "kTfLiteUInt64";
     case kTfLiteString:
       return "kTfLiteString";
     case kTfLiteBool:
@@ -56,6 +60,12 @@ const char* TensorTypeName(TfLiteType type) {
       return "kTfLiteInt16";
     case kTfLiteComplex64:
       return "kTfLiteComplex64";
+    case kTfLiteComplex128:
+      return "kTfLiteComplex128";
+    case kTfLiteFloat16:
+      return "kTfLiteFloat16";
+    case kTfLiteFloat64:
+      return "kTfLiteFloat64";
   }
   return "(invalid)";
 }
@@ -72,6 +82,10 @@ const char* AllocTypeName(TfLiteAllocationType type) {
       return "kTfLiteArenaRw";
     case kTfLiteArenaRwPersistent:
       return "kTfLiteArenaRwPersistent";
+    case kTfLitePersistentRo:
+      return "kTfLitePersistentRo";
+    case kTfLiteCustom:
+      return "kTfLiteCustom";
   }
   return "(invalid)";
 }
@@ -105,13 +119,21 @@ void PrintInterpreterState(Interpreter* interpreter) {
       printf("Node %3zu Operator Custom Name %s\n", node_index,
              reg.custom_name);
     } else {
-      printf("Node %3zu Operator Builtin Code %3d\n", node_index,
-             reg.builtin_code);
+      printf("Node %3zu Operator Builtin Code %3d %s\n", node_index,
+             reg.builtin_code, EnumNamesBuiltinOperator()[reg.builtin_code]);
     }
     printf("  Inputs:");
     PrintTfLiteIntVector(node.inputs);
     printf("  Outputs:");
     PrintTfLiteIntVector(node.outputs);
+    if (node.intermediates && node.intermediates->size) {
+      printf("  Intermediates:");
+      PrintTfLiteIntVector(node.intermediates);
+    }
+    if (node.temporaries && node.temporaries->size) {
+      printf("  Temporaries:");
+      PrintTfLiteIntVector(node.temporaries);
+    }
   }
 }
 

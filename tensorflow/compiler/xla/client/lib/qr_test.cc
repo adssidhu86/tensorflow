@@ -27,12 +27,15 @@ limitations under the License.
 #include "tensorflow/compiler/xla/tests/test_macros.h"
 #include "tensorflow/compiler/xla/xla_data.pb.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
+#include "tensorflow/core/platform/tensor_float_32_utils.h"
 
 namespace {
 
 using QrTest = xla::ClientLibraryTestBase;
 
 XLA_TEST_F(QrTest, Simple) {
+  // Test fails with TensorFloat-32 enabled
+  tensorflow::enable_tensor_float_32_execution(false);
   xla::XlaBuilder builder(TestName());
 
   xla::Array2D<float> a_vals({
@@ -60,7 +63,38 @@ XLA_TEST_F(QrTest, Simple) {
                              xla::ErrorSpec(1e-4, 1e-4));
 }
 
+XLA_TEST_F(QrTest, ZeroDiagonal) {
+  // Test fails with TensorFloat-32 enabled
+  tensorflow::enable_tensor_float_32_execution(false);
+  xla::XlaBuilder builder(TestName());
+
+  xla::Array2D<float> a_vals({
+      {0, 1, 1},
+      {1, 0, 1},
+      {1, 1, 0},
+  });
+
+  xla::XlaOp a;
+  auto a_data = CreateR2Parameter<float>(a_vals, 0, "a", &builder, &a);
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto result,
+      xla::QRDecomposition(a, /*full_matrices=*/true, /*block_size=*/8));
+
+  // Verifies that the decomposition composes back to the original matrix.
+  //
+  // This isn't a terribly demanding test, (e.g., we should verify that Q is
+  // orthonormal and R is upper-triangular) but it's awkward to write such tests
+  // without more linear algebra libraries. It's easier to test the numerics
+  // from Python, anyway, where we have access to numpy and scipy.
+  xla::BatchDot(result.q, result.r, xla::PrecisionConfig::HIGHEST);
+
+  ComputeAndCompareR2<float>(&builder, a_vals, {a_data.get()},
+                             xla::ErrorSpec(1e-4, 1e-4));
+}
+
 XLA_TEST_F(QrTest, SimpleBatched) {
+  // Test fails with TensorFloat-32 enabled
+  tensorflow::enable_tensor_float_32_execution(false);
   xla::XlaBuilder builder(TestName());
 
   xla::Array3D<float> a_vals({

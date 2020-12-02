@@ -28,16 +28,15 @@ namespace {
 TEST(ModelCmdlineFlagsTest, ParseArgsStringMapList) {
   int args_count = 3;
   const char* args[] = {
-      "toco",
-      "--input_arrays=input_1",
+      "toco", "--input_arrays=input_1",
       "--rnn_states={state_array:rnn/BasicLSTMCellZeroState/zeros,"
       "back_edge_source_array:rnn/basic_lstm_cell/Add_1,size:4},"
       "{state_array:rnn/BasicLSTMCellZeroState/zeros_1,"
       "back_edge_source_array:rnn/basic_lstm_cell/Mul_2,size:4}",
-  };
+      nullptr};
 
-  string expected_input_arrays = "input_1";
-  std::vector<std::unordered_map<string, string>> expected_rnn_states;
+  std::string expected_input_arrays = "input_1";
+  std::vector<std::unordered_map<std::string, std::string>> expected_rnn_states;
   expected_rnn_states.push_back(
       {{"state_array", "rnn/BasicLSTMCellZeroState/zeros"},
        {"back_edge_source_array", "rnn/basic_lstm_cell/Add_1"},
@@ -47,7 +46,7 @@ TEST(ModelCmdlineFlagsTest, ParseArgsStringMapList) {
        {"back_edge_source_array", "rnn/basic_lstm_cell/Mul_2"},
        {"size", "4"}});
 
-  string message;
+  std::string message;
   ParsedModelFlags result_flags;
 
   EXPECT_TRUE(ParseModelFlagsFromCommandLineFlags(

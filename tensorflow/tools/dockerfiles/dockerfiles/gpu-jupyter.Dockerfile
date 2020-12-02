@@ -1,4 +1,4 @@
-# Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,81 +19,108 @@
 # throughout. Please refer to the TensorFlow dockerfiles documentation
 # for more information.
 
-ARG UBUNTU_VERSION=16.04
+ARG UBUNTU_VERSION=18.04
 
-FROM nvidia/cuda:10.0-base-ubuntu${UBUNTU_VERSION} as base
+ARG ARCH=
+ARG CUDA=11.0
+FROM nvidia/cuda${ARCH:+-$ARCH}:${CUDA}-base-ubuntu${UBUNTU_VERSION} as base
+# ARCH and CUDA are specified again because the FROM directive resets ARGs
+# (but their default value is retained if set previously)
+ARG ARCH
+ARG CUDA
+ARG CUDNN=8.0.4.30-1
+ARG CUDNN_MAJOR_VERSION=8
+ARG LIB_DIR_PREFIX=x86_64
+ARG LIBNVINFER=7.1.3-1
+ARG LIBNVINFER_MAJOR_VERSION=7
 
+# Needed for string substitution
+SHELL ["/bin/bash", "-c"]
 # Pick up some TF dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
-        cuda-command-line-tools-10-0 \
-        cuda-cublas-10-0 \
-        cuda-cufft-10-0 \
-        cuda-curand-10-0 \
-        cuda-cusolver-10-0 \
-        cuda-cusparse-10-0 \
-        libcudnn7=7.4.1.5-1+cuda10.0 \
+        cuda-command-line-tools-${CUDA/./-} \
+        libcublas-${CUDA/./-} \
+        cuda-nvrtc-${CUDA/./-} \
+        libcufft-${CUDA/./-} \
+        libcurand-${CUDA/./-} \
+        libcusolver-${CUDA/./-} \
+        libcusparse-${CUDA/./-} \
+        curl \
+        libcudnn8=${CUDNN}+cuda${CUDA} \
         libfreetype6-dev \
         libhdf5-serial-dev \
-        libpng12-dev \
         libzmq3-dev \
         pkg-config \
         software-properties-common \
         unzip
 
-RUN apt-get update && \
-        apt-get install nvinfer-runtime-trt-repo-ubuntu1604-5.0.2-ga-cuda10.0 \
-        && apt-get update \
-        && apt-get install -y --no-install-recommends libnvinfer5=5.0.2-1+cuda10.0 \
+# Install TensorRT if not building for PowerPC
+RUN [[ "${ARCH}" = "ppc64le" ]] || { apt-get update && \
+        apt-get install -y --no-install-recommends libnvinfer${LIBNVINFER_MAJOR_VERSION}=${LIBNVINFER}+cuda${CUDA} \
+        libnvinfer-plugin${LIBNVINFER_MAJOR_VERSION}=${LIBNVINFER}+cuda${CUDA} \
         && apt-get clean \
-        && rm -rf /var/lib/apt/lists/*
+        && rm -rf /var/lib/apt/lists/*; }
 
 # For CUDA profiling, TensorFlow requires CUPTI.
-ENV LD_LIBRARY_PATH /usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH /usr/local/cuda/extras/CUPTI/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
-ARG USE_PYTHON_3_NOT_2
-ARG _PY_SUFFIX=${USE_PYTHON_3_NOT_2:+3}
-ARG PYTHON=python${_PY_SUFFIX}
-ARG PIP=pip${_PY_SUFFIX}
+# Link the libcuda stub to the location where tensorflow is searching for it and reconfigure
+# dynamic linker run-time bindings
+RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+    && echo "/usr/local/cuda/lib64/stubs" > /etc/ld.so.conf.d/z-cuda-stubs.conf \
+    && ldconfig
 
 # See http://bugs.python.org/issue19846
 ENV LANG C.UTF-8
 
 RUN apt-get update && apt-get install -y \
-    ${PYTHON} \
-    ${PYTHON}-pip
+    python3 \
+    python3-pip
 
-RUN ${PIP} --no-cache-dir install --upgrade \
+RUN python3 -m pip --no-cache-dir install --upgrade \
     pip \
     setuptools
 
 # Some TF tools expect a "python" binary
-RUN ln -s $(which ${PYTHON}) /usr/local/bin/python 
+RUN ln -s $(which python3) /usr/local/bin/python
 
 # Options:
 #   tensorflow
 #   tensorflow-gpu
 #   tf-nightly
 #   tf-nightly-gpu
+# Set --build-arg TF_PACKAGE_VERSION=1.11.0rc0 to install a specific version.
+# Installs the latest version by default.
 ARG TF_PACKAGE=tensorflow
-RUN ${PIP} install ${TF_PACKAGE}
+ARG TF_PACKAGE_VERSION=
+RUN python3 -m pip install --no-cache-dir ${TF_PACKAGE}${TF_PACKAGE_VERSION:+==${TF_PACKAGE_VERSION}}
 
 COPY bashrc /etc/bash.bashrc
 RUN chmod a+rwx /etc/bash.bashrc
 
-RUN ${PIP} install jupyter matplotlib
+RUN python3 -m pip install --no-cache-dir jupyter matplotlib
+# Pin ipykernel and nbformat; see https://github.com/ipython/ipykernel/issues/422
+RUN python3 -m pip install --no-cache-dir jupyter_http_over_ws ipykernel==5.1.1 nbformat==4.4.0
+RUN jupyter serverextension enable --py jupyter_http_over_ws
 
 RUN mkdir -p /tf/tensorflow-tutorials && chmod -R a+rwx /tf/
 RUN mkdir /.local && chmod a+rwx /.local
 RUN apt-get install -y --no-install-recommends wget
+# some examples require git to fetch dependencies
+RUN apt-get install -y --no-install-recommends git
 WORKDIR /tf/tensorflow-tutorials
-RUN wget https://raw.githubusercontent.com/tensorflow/docs/master/site/en/tutorials/keras/basic_classification.ipynb
-RUN wget https://raw.githubusercontent.com/tensorflow/docs/master/site/en/tutorials/keras/basic_text_classification.ipynb
+RUN wget https://raw.githubusercontent.com/tensorflow/docs/master/site/en/tutorials/keras/classification.ipynb
+RUN wget https://raw.githubusercontent.com/tensorflow/docs/master/site/en/tutorials/keras/overfit_and_underfit.ipynb
+RUN wget https://raw.githubusercontent.com/tensorflow/docs/master/site/en/tutorials/keras/regression.ipynb
+RUN wget https://raw.githubusercontent.com/tensorflow/docs/master/site/en/tutorials/keras/save_and_load.ipynb
+RUN wget https://raw.githubusercontent.com/tensorflow/docs/master/site/en/tutorials/keras/text_classification.ipynb
+RUN wget https://raw.githubusercontent.com/tensorflow/docs/master/site/en/tutorials/keras/text_classification_with_hub.ipynb
 COPY readme-for-jupyter.md README.md
 RUN apt-get autoremove -y && apt-get remove -y wget
 WORKDIR /tf
 EXPOSE 8888
 
-RUN ${PYTHON} -m ipykernel.kernelspec
+RUN python3 -m ipykernel.kernelspec
 
 CMD ["bash", "-c", "source /etc/bash.bashrc && jupyter notebook --notebook-dir=/tf --ip 0.0.0.0 --no-browser --allow-root"]

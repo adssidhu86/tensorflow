@@ -1,8 +1,8 @@
-licenses(["notice"])  # Apache 2.0
-
-exports_files(["LICENSE"])
-
 load("//tensorflow:tensorflow.bzl", "py_test")
+
+package(
+    licenses = ["notice"],  # Apache 2.0
+)
 
 filegroup(
     name = "all_files",
@@ -27,9 +27,8 @@ py_library(
         "tensor_list.py",
         "tensors.py",
         "testing.py",
-        "type_check.py",
     ],
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     visibility = ["//tensorflow:__subpackages__"],
     deps = [
         "//tensorflow/python:dtypes",
@@ -46,7 +45,8 @@ py_library(
 py_test(
     name = "context_managers_test",
     srcs = ["context_managers_test.py"],
-    srcs_version = "PY2AND3",
+    python_version = "PY3",
+    srcs_version = "PY3",
     deps = [
         ":utils",
         "//tensorflow/python:client_testlib",
@@ -56,7 +56,8 @@ py_test(
 py_test(
     name = "misc_test",
     srcs = ["misc_test.py"],
-    srcs_version = "PY2AND3",
+    python_version = "PY3",
+    srcs_version = "PY3",
     deps = [
         ":utils",
         "//tensorflow/python:client_testlib",
@@ -66,18 +67,9 @@ py_test(
 py_test(
     name = "py_func_test",
     srcs = ["py_func_test.py"],
-    srcs_version = "PY2AND3",
+    python_version = "PY3",
+    srcs_version = "PY3",
     tags = ["no_windows"],
-    deps = [
-        ":utils",
-        "//tensorflow/python:client_testlib",
-    ],
-)
-
-py_test(
-    name = "type_check_test",
-    srcs = ["type_check_test.py"],
-    srcs_version = "PY2AND3",
     deps = [
         ":utils",
         "//tensorflow/python:client_testlib",
@@ -87,7 +79,8 @@ py_test(
 py_test(
     name = "tensor_list_test",
     srcs = ["tensor_list_test.py"],
-    srcs_version = "PY2AND3",
+    python_version = "PY3",
+    srcs_version = "PY3",
     deps = [
         ":utils",
         "//tensorflow/python:client_testlib",
@@ -98,7 +91,8 @@ py_test(
 py_test(
     name = "tensors_test",
     srcs = ["tensors_test.py"],
-    srcs_version = "PY2AND3",
+    python_version = "PY3",
+    srcs_version = "PY3",
     deps = [
         ":utils",
         "//tensorflow/python:client_testlib",

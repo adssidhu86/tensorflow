@@ -37,6 +37,7 @@ bool IsElementwiseOperator(OperatorType optype) {
     case OperatorType::kRelu:
     case OperatorType::kRelu1:
     case OperatorType::kRelu6:
+    case OperatorType::kRound:
     case OperatorType::kTanh:
     case OperatorType::kSqrt:
     case OperatorType::kSquare:
@@ -74,7 +75,7 @@ bool IsMoveOperator(OperatorType optype) {
     return ::tensorflow::Status::OK();
   }
 
-  const string intermediate_name = element_op->inputs[0];
+  const std::string intermediate_name = element_op->inputs[0];
   auto it = FindOpWithOutput(*model, intermediate_name);
   if (it == model->operators.end()) {
     AddMessageF("No preceding operator");
@@ -102,8 +103,8 @@ bool IsMoveOperator(OperatorType optype) {
   }
 
   // op->inputs may change so we need to keep a value by copy.
-  const string input_name = move_op->inputs[0];
-  const string output_name = element_op->outputs[0];
+  const std::string input_name = move_op->inputs[0];
+  const std::string output_name = element_op->outputs[0];
 
   AddMessageF("Swapping around operators with %s and %s", LogName(*element_op),
               LogName(*move_op));
@@ -121,14 +122,14 @@ bool IsMoveOperator(OperatorType optype) {
 
     element_op->inputs[0] = input_name;
     element_op->outputs[0] = new_intermediate_name;
-    model->EraseArray(intermediate_name);
+    DeleteArrayIfUnused(intermediate_name, model);
     move_op->inputs[0] = new_intermediate_name;
     move_op->outputs[0] = output_name;
   } else {
     // The intermediate array is now the output array.
-    for (int i = 0; i < model->operators.size(); i++) {
+    for (size_t i = 0; i < model->operators.size(); i++) {
       Operator* consumer = model->operators[i].get();
-      for (int j = 0; j < consumer->inputs.size(); j++) {
+      for (size_t j = 0; j < consumer->inputs.size(); j++) {
         if (consumer->inputs[j] == output_name) {
           consumer->inputs[j] = intermediate_name;
         }

@@ -33,7 +33,7 @@ VectorSupportLibrary::VectorSupportLibrary(PrimitiveType primitive_type,
   scalar_type_ = llvm_ir::PrimitiveTypeToIrType(
       primitive_type, b_->GetInsertBlock()->getModule());
   scalar_pointer_type_ = llvm::PointerType::getUnqual(scalar_type_);
-  vector_type_ = llvm::VectorType::get(scalar_type_, vector_size);
+  vector_type_ = llvm::VectorType::get(scalar_type_, vector_size, false);
   vector_pointer_type_ = llvm::PointerType::getUnqual(vector_type_);
 }
 
@@ -80,10 +80,11 @@ llvm::Value* VectorSupportLibrary::Sub(llvm::Value* lhs, llvm::Value* rhs) {
   return b()->CreateFSub(lhs, rhs);
 }
 
-llvm::Value* VectorSupportLibrary::Max(llvm::Value* lhs, llvm::Value* rhs) {
+llvm::Value* VectorSupportLibrary::Max(llvm::Value* lhs, llvm::Value* rhs,
+                                       bool enable_fast_min_max) {
   AssertCorrectTypes({lhs, rhs});
   if (scalar_type_->isFloatingPointTy()) {
-    return llvm_ir::EmitFloatMax(lhs, rhs, b_);
+    return llvm_ir::EmitFloatMax(lhs, rhs, b_, enable_fast_min_max);
   } else {
     LOG(FATAL) << "Max for integers is unimplemented";
   }
@@ -107,13 +108,19 @@ llvm::Value* VectorSupportLibrary::Div(llvm::Value* lhs, llvm::Value* rhs) {
 llvm::Value* VectorSupportLibrary::Clamp(llvm::Value* a,
                                          const llvm::APFloat& low,
                                          const llvm::APFloat& high) {
+  CHECK(!low.isNaN());
+  CHECK(!high.isNaN());
+  CHECK(low.compare(high) == llvm::APFloat::cmpLessThan);
+
   AssertCorrectTypes({a});
   llvm::Type* type = a->getType();
-  CHECK(low.compare(high) == llvm::APFloat::cmpLessThan);
   CHECK(scalar_type_->isFloatingPointTy());
-  return llvm_ir::EmitFloatMin(
-      llvm_ir::EmitFloatMax(a, GetConstantFloat(type, low), b_),
-      GetConstantFloat(type, high), b_);
+
+  llvm::Value* low_value = GetConstantFloat(type, low);
+  llvm::Value* high_value = GetConstantFloat(type, high);
+  a = b_->CreateSelect(b_->CreateFCmpUGE(a, low_value), a, low_value);
+  a = b_->CreateSelect(b_->CreateFCmpULE(a, high_value), a, high_value);
+  return a;
 }
 
 llvm::Value* VectorSupportLibrary::FCmpEQMask(llvm::Value* lhs,
@@ -148,7 +155,7 @@ llvm::Type* VectorSupportLibrary::IntegerTypeForFloatSize(bool vector) {
   int64 float_size_bits = data_layout.getTypeSizeInBits(scalar_type());
   llvm::Type* scalar_int_type = b()->getIntNTy(float_size_bits);
   if (vector) {
-    return llvm::VectorType::get(scalar_int_type, vector_size());
+    return llvm::VectorType::get(scalar_int_type, vector_size(), false);
   } else {
     return scalar_int_type;
   }

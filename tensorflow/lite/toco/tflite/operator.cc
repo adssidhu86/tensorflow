@@ -14,13 +14,17 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/lite/toco/tflite/operator.h"
 
+#include <map>
+
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_def.pb.h"
 #include "tensorflow/core/util/ptr_util.h"
+
 // TODO(ycling): Consider refactoring to extract the LSTM definition out of
 // graph_transformation module.
+#include "tensorflow/lite/delegates/flex/allowlisted_flex_ops.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/toco/graph_transformations/lstm_utils.h"
 #include "tensorflow/lite/toco/model.h"
@@ -28,11 +32,58 @@ limitations under the License.
 #include "tensorflow/lite/toco/tflite/custom_operator.h"
 #include "tensorflow/lite/toco/tflite/simple_operator.h"
 #include "tensorflow/lite/toco/tflite/types.h"
-#include "tensorflow/lite/toco/tflite/whitelisted_flex_ops.h"
+#include "tensorflow/lite/tools/versioning/op_version.h"
 
 namespace toco {
 
 namespace tflite {
+
+// LINT.IfChange
+
+::tflite::TensorType GetTensorType(const ArrayDataType type) {
+  const std::map<ArrayDataType, ::tflite::TensorType> tensor_type_map = {
+      {ArrayDataType::kBool, ::tflite::TensorType_BOOL},
+      {ArrayDataType::kFloat, ::tflite::TensorType_FLOAT32},
+      {ArrayDataType::kInt8, ::tflite::TensorType_INT8},
+      {ArrayDataType::kUint8, ::tflite::TensorType_UINT8},
+      {ArrayDataType::kInt16, ::tflite::TensorType_INT16},
+      {ArrayDataType::kInt32, ::tflite::TensorType_INT32},
+      {ArrayDataType::kInt64, ::tflite::TensorType_INT64},
+      {ArrayDataType::kUint64, ::tflite::TensorType_UINT64},
+      {ArrayDataType::kString, ::tflite::TensorType_STRING},
+      {ArrayDataType::kComplex64, ::tflite::TensorType_COMPLEX64},
+      {ArrayDataType::kComplex128, ::tflite::TensorType_COMPLEX128},
+      {ArrayDataType::kFloat16, ::tflite::TensorType_FLOAT16},
+      {ArrayDataType::kFloat64, ::tflite::TensorType_FLOAT64}};
+
+  auto it = tensor_type_map.find(type);
+  if (it != tensor_type_map.end()) {
+    return it->second;
+  }
+  return static_cast<::tflite::TensorType>(-1);
+}
+
+::tflite::OpSignature GetVersioningOpSig(
+    const ::tflite::BuiltinOperator op, const OperatorSignature& op_signature) {
+  std::vector<::tflite::TensorType> input_types, output_types;
+  for (const auto& input_name : op_signature.op->inputs) {
+    ::tflite::TensorType input_type = static_cast<::tflite::TensorType>(-1);
+    if (op_signature.model->HasArray(input_name)) {
+      const Array& input_array = op_signature.model->GetArray(input_name);
+      input_type = GetTensorType(input_array.data_type);
+    }
+    input_types.push_back(input_type);
+  }
+  for (const auto& output_name : op_signature.op->outputs) {
+    ::tflite::TensorType output_type = static_cast<::tflite::TensorType>(-1);
+    if (op_signature.model->HasArray(output_name)) {
+      const Array& output_array = op_signature.model->GetArray(output_name);
+      output_type = GetTensorType(output_array.data_type);
+    }
+    output_types.push_back(output_type);
+  }
+  return ::tflite::OpSignature{op, input_types, output_types};
+}
 
 class AveragePool
     : public BuiltinOperator<AveragePoolOperator, ::tflite::Pool2DOptions,
@@ -60,15 +111,6 @@ class AveragePool
     op->kheight = options.filter_height();
     op->fused_activation_function =
         ActivationFunction::Deserialize(options.fused_activation_function());
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    const string& input_name = op_signature.op->inputs[0];
-    const Array& input_array = op_signature.model->GetArray(input_name);
-    if (input_array.data_type == ArrayDataType::kInt8) {
-      return 2;
-    }
-    return 1;
   }
 };
 
@@ -99,23 +141,6 @@ class Convolution
     op->dilation_height_factor = options.dilation_h_factor();
     op->fused_activation_function =
         ActivationFunction::Deserialize(options.fused_activation_function());
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    const string& input_name = op_signature.op->inputs[0];
-    const string& filter_name = op_signature.op->inputs[1];
-    const string& output_name = op_signature.op->outputs[0];
-    const Array& input_array = op_signature.model->GetArray(input_name);
-    const Array& filter_array = op_signature.model->GetArray(filter_name);
-    const Array& output_array = op_signature.model->GetArray(output_name);
-    // If the op is a signed int8 hybrid operation, we need to return
-    // version 2.
-    if (input_array.data_type == ArrayDataType::kFloat &&
-        filter_array.data_type == ArrayDataType::kInt8 &&
-        output_array.data_type == ArrayDataType::kFloat) {
-      return 2;
-    }
-    return 1;
   }
 };
 
@@ -153,11 +178,13 @@ class DepthwiseConvolution
   int GetVersion(const OperatorSignature& op_signature) const override {
     const auto& conv_op =
         static_cast<const DepthwiseConvOperator&>(*op_signature.op);
-    if (conv_op.dilation_width_factor != 1 ||
-        conv_op.dilation_height_factor != 1) {
-      return 2;
-    }
-    return 1;
+    ::tflite::OpSignature op_sig =
+        GetVersioningOpSig(builtin_op(), op_signature);
+    op_sig.options.depthwise_conv_2d.dilation_w_factor =
+        conv_op.dilation_width_factor;
+    op_sig.options.depthwise_conv_2d.dilation_h_factor =
+        conv_op.dilation_height_factor;
+    return ::tflite::GetBuiltinOperatorVersion(op_sig);
   }
 };
 
@@ -179,10 +206,21 @@ class Add : public BuiltinOperator<AddOperator, ::tflite::AddOptions,
     op->fused_activation_function =
         ActivationFunction::Deserialize(options.fused_activation_function());
   }
+};
 
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
+class AddN : public BuiltinOperator<AddNOperator, ::tflite::AddNOptions,
+                                    ::tflite::BuiltinOptions_AddNOptions> {
+ public:
+  using BuiltinOperator::BuiltinOperator;
+
+  flatbuffers::Offset<TfLiteOptions> WriteOptions(
+      const TocoOperator& op,
+      flatbuffers::FlatBufferBuilder* builder) const override {
+    return ::tflite::CreateAddNOptions(*builder);
   }
+
+  void ReadOptions(const TfLiteOptions& options,
+                   TocoOperator* op) const override {}
 };
 
 class SpaceToBatchND
@@ -202,7 +240,13 @@ class SpaceToBatchND
                    TocoOperator* op) const override {}
 
   int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
+    const std::string& input_name = op_signature.op->inputs[0];
+    const Array& input_array = op_signature.model->GetArray(input_name);
+    ::tflite::OpSignature op_sig =
+        GetVersioningOpSig(builtin_op(), op_signature);
+    op_sig.options.single_input_op.num_dims =
+        input_array.shape().dimensions_count();
+    return ::tflite::GetBuiltinOperatorVersion(op_sig);
   }
 };
 
@@ -226,7 +270,20 @@ class Sub : public BuiltinOperator<SubOperator, ::tflite::SubOptions,
   }
 
   int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
+    const std::string& input1_name = op_signature.op->inputs[0];
+    const std::string& input2_name = op_signature.op->inputs[1];
+    const Array& input1_array = op_signature.model->GetArray(input1_name);
+    const Array& input2_array = op_signature.model->GetArray(input2_name);
+    ::tflite::OpSignature op_sig =
+        GetVersioningOpSig(builtin_op(), op_signature);
+    if (input1_array.has_shape() && input2_array.has_shape()) {
+      op_sig.options.addsub.num_dims =
+          std::max(input1_array.shape().dimensions_count(),
+                   input2_array.shape().dimensions_count());
+      op_sig.options.addsub.need_broadcast =
+          (input1_array.shape() != input2_array.shape());
+    }
+    return ::tflite::GetBuiltinOperatorVersion(op_sig);
   }
 };
 
@@ -250,7 +307,20 @@ class Div : public BuiltinOperator<DivOperator, ::tflite::DivOptions,
   }
 
   int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
+    const std::string& input1_name = op_signature.op->inputs[0];
+    const std::string& input2_name = op_signature.op->inputs[1];
+    const Array& input1_array = op_signature.model->GetArray(input1_name);
+    const Array& input2_array = op_signature.model->GetArray(input2_name);
+    ::tflite::OpSignature op_sig =
+        GetVersioningOpSig(builtin_op(), op_signature);
+    if (input1_array.has_shape() && input2_array.has_shape()) {
+      op_sig.options.broadcast.num_dims =
+          std::max(input1_array.shape().dimensions_count(),
+                   input2_array.shape().dimensions_count());
+      op_sig.options.broadcast.need_broadcast =
+          (input1_array.shape() != input2_array.shape());
+    }
+    return ::tflite::GetBuiltinOperatorVersion(op_sig);
   }
 };
 
@@ -271,7 +341,13 @@ class BatchToSpaceND
                    TocoOperator* op) const override {}
 
   int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
+    const std::string& input_name = op_signature.op->inputs[0];
+    const Array& input_array = op_signature.model->GetArray(input_name);
+    ::tflite::OpSignature op_sig =
+        GetVersioningOpSig(builtin_op(), op_signature);
+    op_sig.options.single_input_op.num_dims =
+        input_array.shape().dimensions_count();
+    return ::tflite::GetBuiltinOperatorVersion(op_sig);
   }
 };
 
@@ -292,10 +368,6 @@ class Cast : public BuiltinOperator<CastOperator, ::tflite::CastOptions,
     op->src_data_type = DataType::Deserialize(options.in_data_type());
     op->dst_data_type = DataType::Deserialize(options.out_data_type());
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class Concatenation
@@ -314,25 +386,23 @@ class Concatenation
                    TocoOperator* op) const override {
     op->axis = options.axis();
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
-class DepthToSpace : public CustomOperator<DepthToSpaceOperator> {
+class DepthToSpace
+    : public BuiltinOperator<DepthToSpaceOperator,
+                             ::tflite::DepthToSpaceOptions,
+                             ::tflite::BuiltinOptions_DepthToSpaceOptions> {
  public:
-  using CustomOperator::CustomOperator;
-  void WriteOptions(const TocoOperator& op,
-                    flexbuffers::Builder* fbb) const override {
-    fbb->Int("block_size", op.block_size);
-  }
-  void ReadOptions(const flexbuffers::Map& m, TocoOperator* op) const override {
-    op->block_size = m["block_size"].AsInt64();
+  using BuiltinOperator::BuiltinOperator;
+  flatbuffers::Offset<TfLiteOptions> WriteOptions(
+      const TocoOperator& op,
+      flatbuffers::FlatBufferBuilder* builder) const override {
+    return ::tflite::CreateDepthToSpaceOptions(*builder, op.block_size);
   }
 
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
+  void ReadOptions(const TfLiteOptions& options,
+                   TocoOperator* op) const override {
+    op->block_size = options.block_size();
   }
 };
 
@@ -358,7 +428,10 @@ class FakeQuant
   }
   int GetVersion(const OperatorSignature& op_signature) const override {
     const auto& fq_op = static_cast<const FakeQuantOperator&>(*op_signature.op);
-    return fq_op.narrow_range ? 2 : 1;
+    ::tflite::OpSignature op_sig =
+        GetVersioningOpSig(builtin_op(), op_signature);
+    op_sig.options.fakequant.narrow_range = fq_op.narrow_range;
+    return ::tflite::GetBuiltinOperatorVersion(op_sig);
   }
 };
 
@@ -368,28 +441,27 @@ class FullyConnected
                              ::tflite::BuiltinOptions_FullyConnectedOptions> {
  public:
   using BuiltinOperator::BuiltinOperator;
+
+  ::tflite::FullyConnectedOptionsWeightsFormat GetWeightFormat(
+      FullyConnectedWeightsFormat fmt) const {
+    switch (fmt) {
+      case FullyConnectedWeightsFormat::kDefault:
+        return ::tflite::FullyConnectedOptionsWeightsFormat_DEFAULT;
+      case FullyConnectedWeightsFormat::kShuffled4x16Int8:
+        return ::tflite::FullyConnectedOptionsWeightsFormat_SHUFFLED4x16INT8;
+      default:
+        LOG(ERROR) << "Unhandled FC weights format";
+        return ::tflite::FullyConnectedOptionsWeightsFormat_DEFAULT;
+    }
+  }
+
   flatbuffers::Offset<TfLiteOptions> WriteOptions(
       const TocoOperator& op,
       flatbuffers::FlatBufferBuilder* builder) const override {
     auto activation_function =
         ActivationFunction::Serialize(op.fused_activation_function);
-    ::tflite::FullyConnectedOptionsWeightsFormat tflite_weights_format;
-    switch (op.weights_format) {
-      case FullyConnectedWeightsFormat::kDefault:
-        tflite_weights_format =
-            ::tflite::FullyConnectedOptionsWeightsFormat_DEFAULT;
-        break;
-      case FullyConnectedWeightsFormat::kShuffled4x16Int8:
-        tflite_weights_format =
-            ::tflite::FullyConnectedOptionsWeightsFormat_SHUFFLED4x16INT8;
-        break;
-      default:
-        LOG(ERROR) << "Unhandled FC weights format";
-        tflite_weights_format =
-            ::tflite::FullyConnectedOptionsWeightsFormat_DEFAULT;
-    }
-    return ::tflite::CreateFullyConnectedOptions(*builder, activation_function,
-                                                 tflite_weights_format);
+    return ::tflite::CreateFullyConnectedOptions(
+        *builder, activation_function, GetWeightFormat(op.weights_format));
   }
 
   void ReadOptions(const TfLiteOptions& options,
@@ -412,23 +484,13 @@ class FullyConnected
   int GetVersion(const OperatorSignature& op_signature) const override {
     const auto& fc_op =
         static_cast<const FullyConnectedOperator&>(*op_signature.op);
-    if (fc_op.weights_format == FullyConnectedWeightsFormat::kDefault) {
-      return 1;
-    }
-    const string& input_name = op_signature.op->inputs[0];
-    const string& weights_name = op_signature.op->inputs[1];
-    const string& output_name = op_signature.op->outputs[0];
-    const Array& input_array = op_signature.model->GetArray(input_name);
-    const Array& weights_array = op_signature.model->GetArray(weights_name);
-    const Array& output_array = op_signature.model->GetArray(output_name);
-    // If the op is a signed int8 hybrid operation, we need to return
-    // version 3.
-    if (input_array.data_type == ArrayDataType::kFloat &&
-        weights_array.data_type == ArrayDataType::kInt8 &&
-        output_array.data_type == ArrayDataType::kFloat) {
-      return 3;
-    }
-    return 2;
+    ::tflite::OpSignature op_sig =
+        GetVersioningOpSig(builtin_op(), op_signature);
+    op_sig.options.fully_connected.keep_num_dims = fc_op.keep_num_dims;
+    op_sig.options.fully_connected.weights_format =
+        GetWeightFormat(fc_op.weights_format);
+    op_sig.options.fully_connected.sparse_weight = false;
+    return ::tflite::GetBuiltinOperatorVersion(op_sig);
   }
 };
 
@@ -447,10 +509,22 @@ class Gather : public BuiltinOperator<GatherOperator, ::tflite::GatherOptions,
                    TocoOperator* op) const override {
     op->axis = {options.axis()};
   }
+};
 
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
+class GatherNd
+    : public BuiltinOperator<GatherNdOperator, ::tflite::GatherNdOptions,
+                             ::tflite::BuiltinOptions_GatherNdOptions> {
+ public:
+  using BuiltinOperator::BuiltinOperator;
+
+  flatbuffers::Offset<TfLiteOptions> WriteOptions(
+      const TocoOperator& op,
+      flatbuffers::FlatBufferBuilder* builder) const override {
+    return ::tflite::CreateGatherNdOptions(*builder);
   }
+
+  void ReadOptions(const TfLiteOptions& options,
+                   TocoOperator* op) const override {}
 };
 
 class Svdf : public BuiltinOperator<SvdfOperator, ::tflite::SVDFOptions,
@@ -471,24 +545,6 @@ class Svdf : public BuiltinOperator<SvdfOperator, ::tflite::SVDFOptions,
         ActivationFunction::Deserialize(options.fused_activation_function());
     op->rank = options.rank();
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    const string& input_name = op_signature.op->inputs[0];
-    const string& weights_feature_name = op_signature.op->inputs[1];
-    const string& output_name = op_signature.op->outputs[0];
-    const Array& input_array = op_signature.model->GetArray(input_name);
-    const Array& weights_feature_array =
-        op_signature.model->GetArray(weights_feature_name);
-    const Array& output_array = op_signature.model->GetArray(output_name);
-    // If the op is a signed int8 hybrid operation, we need to return
-    // version 2.
-    if (input_array.data_type == ArrayDataType::kFloat &&
-        weights_feature_array.data_type == ArrayDataType::kInt8 &&
-        output_array.data_type == ArrayDataType::kFloat) {
-      return 2;
-    }
-    return 1;
-  }
 };
 
 class L2Normalization
@@ -508,10 +564,6 @@ class L2Normalization
                    TocoOperator* op) const override {
     op->fused_activation_function =
         ActivationFunction::Deserialize(options.fused_activation_function());
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
   }
 };
 
@@ -540,10 +592,6 @@ class L2Pool : public BuiltinOperator<L2PoolOperator, ::tflite::Pool2DOptions,
     op->fused_activation_function =
         ActivationFunction::Deserialize(options.fused_activation_function());
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class LocalResponseNormalization
@@ -566,10 +614,6 @@ class LocalResponseNormalization
     op->bias = options.bias();
     op->alpha = options.alpha();
     op->beta = options.beta();
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
   }
 };
 
@@ -598,10 +642,6 @@ class MaxPool : public BuiltinOperator<MaxPoolOperator, ::tflite::Pool2DOptions,
     op->fused_activation_function =
         ActivationFunction::Deserialize(options.fused_activation_function());
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class Mul : public BuiltinOperator<MulOperator, ::tflite::MulOptions,
@@ -624,7 +664,24 @@ class Mul : public BuiltinOperator<MulOperator, ::tflite::MulOptions,
   }
 
   int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
+    const std::string& input1_name = op_signature.op->inputs[0];
+    const std::string& input2_name = op_signature.op->inputs[1];
+    const std::string& output_name = op_signature.op->outputs[0];
+    const Array& input1_array = op_signature.model->GetArray(input1_name);
+    const Array& input2_array = op_signature.model->GetArray(input2_name);
+    const Array& output_array = op_signature.model->GetArray(output_name);
+    const auto& input1_quant = input1_array.quantization_params;
+    const auto& input2_quant = input2_array.quantization_params;
+    const auto& output_quant = output_array.quantization_params;
+    const float input1_scale = input1_quant ? input1_quant->scale : 0.0f;
+    const float input2_scale = input2_quant ? input2_quant->scale : 0.0f;
+    const float output_scale = output_quant ? output_quant->scale : 0.0f;
+    ::tflite::OpSignature op_sig =
+        GetVersioningOpSig(builtin_op(), op_signature);
+    op_sig.options.mul.input1_scale = input1_scale;
+    op_sig.options.mul.input2_scale = input2_scale;
+    op_sig.options.mul.output_scale = output_scale;
+    return ::tflite::GetBuiltinOperatorVersion(op_sig);
   }
 };
 
@@ -641,10 +698,6 @@ class Pad : public BuiltinOperator<PadOperator, ::tflite::PadOptions,
 
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {}
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class Tile
@@ -660,9 +713,6 @@ class Tile
 
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {}
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class PadV2 : public BuiltinOperator<PadV2Operator, ::tflite::PadV2Options,
@@ -678,10 +728,6 @@ class PadV2 : public BuiltinOperator<PadV2Operator, ::tflite::PadV2Options,
 
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {}
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class Reshape
@@ -703,10 +749,6 @@ class Reshape
     op->shape.insert(op->shape.end(), options.new_shape()->begin(),
                      options.new_shape()->end());
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class Softmax
@@ -723,15 +765,6 @@ class Softmax
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {
     op->beta = options.beta();
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    const string& input_name = op_signature.op->inputs[0];
-    const Array& input_array = op_signature.model->GetArray(input_name);
-    if (input_array.data_type == ArrayDataType::kInt8) {
-      return 2;
-    }
-    return 1;
   }
 };
 
@@ -751,10 +784,6 @@ class SpaceToDepth
                    TocoOperator* op) const override {
     op->block_size = options.block_size();
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class Transpose
@@ -770,28 +799,32 @@ class Transpose
 
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {}
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class Lstm : public BuiltinOperator<LstmCellOperator, ::tflite::LSTMOptions,
                                     ::tflite::BuiltinOptions_LSTMOptions> {
  public:
   using BuiltinOperator::BuiltinOperator;
+
+  ::tflite::LSTMKernelType GetKernelType(
+      LstmCellOperator::KernelType type) const {
+    switch (type) {
+      case LstmCellOperator::KERNEL_BASIC:
+        return ::tflite::LSTMKernelType_BASIC;
+        break;
+      case LstmCellOperator::KERNEL_FULL:
+        return ::tflite::LSTMKernelType_FULL;
+        break;
+      default:
+        LOG(ERROR) << "Unhandled Kernel Type";
+        return static_cast<::tflite::LSTMKernelType>(-1);
+    }
+  }
+
   flatbuffers::Offset<TfLiteOptions> WriteOptions(
       const TocoOperator& op,
       flatbuffers::FlatBufferBuilder* builder) const override {
-    ::tflite::LSTMKernelType kernel_type;
-    switch (op.kernel_type) {
-      case LstmCellOperator::KERNEL_BASIC:
-        kernel_type = ::tflite::LSTMKernelType_BASIC;
-        break;
-      case LstmCellOperator::KERNEL_FULL:
-        kernel_type = ::tflite::LSTMKernelType_FULL;
-        break;
-    }
+    ::tflite::LSTMKernelType kernel_type = GetKernelType(op.kernel_type);
 
     // Current toco converter only supports tanh, no clip.
     return ::tflite::CreateLSTMOptions(*builder, /*fused_activation_function=*/
@@ -819,27 +852,10 @@ class Lstm : public BuiltinOperator<LstmCellOperator, ::tflite::LSTMOptions,
   int GetVersion(const OperatorSignature& op_signature) const override {
     const auto& lstm_op =
         static_cast<const LstmCellOperator&>(*op_signature.op);
-    switch (lstm_op.kernel_type) {
-      case LstmCellOperator::KERNEL_FULL: {
-        // If the input tensor is float and a weight is int8, this is a version
-        // 3 hybrid operation.
-        const string& input_name = op_signature.op->inputs[0];
-        const string& weights_name = op_signature.op->inputs[2];
-        const string& output_name = op_signature.op->outputs[0];
-        const Array& input_array = op_signature.model->GetArray(input_name);
-        const Array& weights_array = op_signature.model->GetArray(weights_name);
-        const Array& output_array = op_signature.model->GetArray(output_name);
-        if (input_array.data_type == ArrayDataType::kFloat &&
-            weights_array.data_type == ArrayDataType::kInt8 &&
-            output_array.data_type == ArrayDataType::kFloat) {
-          return 3;
-        }
-        return 1;
-      }
-      case LstmCellOperator::KERNEL_BASIC:
-        // KERNEL_BASIC was added in version 2.
-        return 2;
-    }
+    ::tflite::OpSignature op_sig =
+        GetVersioningOpSig(builtin_op(), op_signature);
+    op_sig.options.lstm.kernel_type = GetKernelType(lstm_op.kernel_type);
+    return ::tflite::GetBuiltinOperatorVersion(op_sig);
   }
 
   std::vector<bool> GetMutatingInputVariables(
@@ -889,23 +905,6 @@ class UnidirectionalSequenceLstm
            ::tflite::ActivationFunctionType_TANH);
   }
 
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    // If the input tensor is float and a weight is int8, this is a version
-    // 2 hybrid operation.
-    const string& input_name = op_signature.op->inputs[0];
-    const string& weights_name = op_signature.op->inputs[2];
-    const string& output_name = op_signature.op->outputs[0];
-    const Array& input_array = op_signature.model->GetArray(input_name);
-    const Array& weights_array = op_signature.model->GetArray(weights_name);
-    const Array& output_array = op_signature.model->GetArray(output_name);
-    if (input_array.data_type == ArrayDataType::kFloat &&
-        weights_array.data_type == ArrayDataType::kInt8 &&
-        output_array.data_type == ArrayDataType::kFloat) {
-      return 2;
-    }
-    return 1;
-  }
-
   std::vector<bool> GetMutatingInputVariables(
       const Operator& op) const override {
     std::vector<bool> mutating_input_variables(op.inputs.size(), false);
@@ -941,10 +940,6 @@ class BidirectionalSequenceLstm
     DCHECK(options.fused_activation_function() ==
            ::tflite::ActivationFunctionType_TANH);
     op->merge_outputs = options.merge_outputs();
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
   }
 
   std::vector<bool> GetMutatingInputVariables(
@@ -988,10 +983,6 @@ class BidirectionalSequenceRnn
     op->merge_outputs = options.merge_outputs();
   }
 
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
-
   std::vector<bool> GetMutatingInputVariables(
       const Operator& op) const override {
     std::vector<bool> mutating_input_variables(op.inputs.size(), false);
@@ -1017,10 +1008,6 @@ class Mean : public BuiltinOperator<MeanOperator, ::tflite::ReducerOptions,
                    TocoOperator* op) const override {
     op->keep_dims = options.keep_dims();
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class Sum
@@ -1037,10 +1024,6 @@ class Sum
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {
     op->keep_dims = options.keep_dims();
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
   }
 };
 
@@ -1059,10 +1042,6 @@ class ReduceMax
                    TocoOperator* op) const override {
     op->keep_dims = options.keep_dims();
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class ReduceMin
@@ -1079,10 +1058,6 @@ class ReduceMin
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {
     op->keep_dims = options.keep_dims();
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
   }
 };
 
@@ -1101,10 +1076,6 @@ class ReduceProd
                    TocoOperator* op) const override {
     op->keep_dims = options.keep_dims();
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class ReduceAny
@@ -1122,10 +1093,6 @@ class ReduceAny
                    TocoOperator* op) const override {
     op->keep_dims = options.keep_dims();
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class ResizeBilinear
@@ -1137,16 +1104,25 @@ class ResizeBilinear
   flatbuffers::Offset<TfLiteOptions> WriteOptions(
       const TocoOperator& op,
       flatbuffers::FlatBufferBuilder* builder) const override {
-    return ::tflite::CreateResizeBilinearOptions(*builder, op.align_corners);
+    return ::tflite::CreateResizeBilinearOptions(*builder, op.align_corners,
+                                                 op.half_pixel_centers);
   }
 
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {
     op->align_corners = options.align_corners();
+    op->half_pixel_centers = options.half_pixel_centers();
   }
 
   int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
+    const auto& resize_bilinear_op =
+        static_cast<const ResizeBilinearOperator&>(*op_signature.op);
+    ::tflite::OpSignature op_sig =
+        GetVersioningOpSig(builtin_op(), op_signature);
+    op_sig.options.resize.half_pixel_centers =
+        resize_bilinear_op.half_pixel_centers;
+    op_sig.options.resize.align_corners = resize_bilinear_op.align_corners;
+    return ::tflite::GetBuiltinOperatorVersion(op_sig);
   }
 };
 
@@ -1159,17 +1135,24 @@ class ResizeNearestNeighbor
   flatbuffers::Offset<TfLiteOptions> WriteOptions(
       const TocoOperator& op,
       flatbuffers::FlatBufferBuilder* builder) const override {
-    return ::tflite::CreateResizeNearestNeighborOptions(*builder,
-                                                        op.align_corners);
+    return ::tflite::CreateResizeNearestNeighborOptions(
+        *builder, op.align_corners, op.half_pixel_centers);
   }
 
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {
     op->align_corners = options.align_corners();
+    op->half_pixel_centers = options.half_pixel_centers();
   }
 
   int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
+    const auto& resize_nn_op =
+        static_cast<const ResizeNearestNeighborOperator&>(*op_signature.op);
+    ::tflite::OpSignature op_sig =
+        GetVersioningOpSig(builtin_op(), op_signature);
+    op_sig.options.resize.half_pixel_centers = resize_nn_op.half_pixel_centers;
+    op_sig.options.resize.align_corners = resize_nn_op.align_corners;
+    return ::tflite::GetBuiltinOperatorVersion(op_sig);
   }
 };
 
@@ -1192,10 +1175,6 @@ class Squeeze
                             options.squeeze_dims()->begin(),
                             options.squeeze_dims()->end());
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class Split
@@ -1214,10 +1193,6 @@ class Split
                    TocoOperator* op) const override {
     op->num_split = options.num_splits();
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class SplitV
@@ -1235,10 +1210,6 @@ class SplitV
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {
     op->num_split = options.num_splits();
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
   }
 };
 
@@ -1266,7 +1237,12 @@ class StridedSlice
   }
 
   int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
+    const auto& ss_op =
+        static_cast<const StridedSliceOperator&>(*op_signature.op);
+    ::tflite::OpSignature op_sig =
+        GetVersioningOpSig(builtin_op(), op_signature);
+    op_sig.options.single_input_op.num_dims = ss_op.start_indices.size();
+    return ::tflite::GetBuiltinOperatorVersion(op_sig);
   }
 };
 
@@ -1282,10 +1258,6 @@ class TopK_V2 : public BuiltinOperator<TopKV2Operator, ::tflite::TopKV2Options,
 
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {}
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class ArgMax : public BuiltinOperator<ArgMaxOperator, ::tflite::ArgMaxOptions,
@@ -1303,10 +1275,6 @@ class ArgMax : public BuiltinOperator<ArgMaxOperator, ::tflite::ArgMaxOptions,
                    TocoOperator* op) const override {
     op->output_data_type = DataType::Deserialize(options.output_type());
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class ArgMin : public BuiltinOperator<ArgMinOperator, ::tflite::ArgMinOptions,
@@ -1323,10 +1291,6 @@ class ArgMin : public BuiltinOperator<ArgMinOperator, ::tflite::ArgMinOptions,
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {
     op->output_data_type = DataType::Deserialize(options.output_type());
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
   }
 };
 
@@ -1351,10 +1315,6 @@ class TransposeConv
     op->stride_width = options.stride_w();
     op->stride_height = options.stride_h();
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class SparseToDense
@@ -1374,10 +1334,6 @@ class SparseToDense
                    TocoOperator* op) const override {
     op->validate_indices = options.validate_indices();
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class ExpandDims
@@ -1394,10 +1350,6 @@ class ExpandDims
 
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {}
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class Pack : public BuiltinOperator<PackOperator, ::tflite::PackOptions,
@@ -1415,10 +1367,6 @@ class Pack : public BuiltinOperator<PackOperator, ::tflite::PackOptions,
                    TocoOperator* op) const override {
     op->values_count = options.values_count();
     op->axis = options.axis();
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
   }
 };
 
@@ -1438,10 +1386,6 @@ class Shape
                    TocoOperator* op) const override {
     op->output_data_type = DataType::Deserialize(options.out_type());
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class OneHot : public BuiltinOperator<OneHotOperator, ::tflite::OneHotOptions,
@@ -1456,10 +1400,6 @@ class OneHot : public BuiltinOperator<OneHotOperator, ::tflite::OneHotOptions,
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {
     op->axis = options.axis();
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
   }
 };
 
@@ -1502,6 +1442,17 @@ class Unpack : public BuiltinOperator<UnpackOperator, ::tflite::UnpackOptions,
   }
 
   int GetVersion(const OperatorSignature& op_signature) const override {
+    const std::string& input_name = op_signature.op->inputs[0];
+    const Array& input_array = op_signature.model->GetArray(input_name);
+    // If the op take int8/uint8 input, it is version 2.
+    if (input_array.data_type == ArrayDataType::kInt8 ||
+        input_array.data_type == ArrayDataType::kUint8) {
+      return 2;
+    }
+    // If the op take bool input, it is version 3.
+    if (input_array.data_type == ArrayDataType::kBool) {
+      return 3;
+    }
     return 1;
   }
 };
@@ -1520,10 +1471,6 @@ class LeakyRelu
                    TocoOperator* op) const override {
     op->alpha = options.alpha();
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class SquaredDifference
@@ -1541,10 +1488,6 @@ class SquaredDifference
 
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {}
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class MirrorPad
@@ -1566,8 +1509,6 @@ class MirrorPad
                    ? MirrorPadMode::kReflect
                    : MirrorPadMode::kSymmetric;
   }
-
-  int GetVersion(const OperatorSignature& op) const override { return 1; }
 };
 
 class Unique : public BuiltinOperator<UniqueOperator, ::tflite::UniqueOptions,
@@ -1591,10 +1532,6 @@ class Unique : public BuiltinOperator<UniqueOperator, ::tflite::UniqueOptions,
             ? toco::ArrayDataType::kInt64
             : toco::ArrayDataType::kInt32;
   }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
-  }
 };
 
 class UnidirectionalSequenceRnn
@@ -1613,13 +1550,9 @@ class UnidirectionalSequenceRnn
   }
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {
-    // Only support tanh actication, so check that tflite type is tanh.
+    // Only support tanh activation, so check that tflite type is tanh.
     DCHECK(options.fused_activation_function() ==
            ::tflite::ActivationFunctionType_TANH);
-  }
-
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    return 1;
   }
 
   std::vector<bool> GetMutatingInputVariables(
@@ -1630,8 +1563,23 @@ class UnidirectionalSequenceRnn
   }
 };
 
+class Where : public BuiltinOperator<WhereOperator, ::tflite::WhereOptions,
+                                     ::tflite::BuiltinOptions_WhereOptions> {
+ public:
+  using BuiltinOperator::BuiltinOperator;
+
+  flatbuffers::Offset<TfLiteOptions> WriteOptions(
+      const TocoOperator& op,
+      flatbuffers::FlatBufferBuilder* builder) const override {
+    return ::tflite::CreateWhereOptions(*builder);
+  }
+
+  void ReadOptions(const TfLiteOptions& options,
+                   TocoOperator* op) const override {}
+};
+
 std::unique_ptr<flexbuffers::Builder> WriteFlexOpOptions(
-    const string& tensorflow_node_def) {
+    const std::string& tensorflow_node_def) {
   auto fbb = absl::make_unique<flexbuffers::Builder>();
 
   ::tensorflow::NodeDef node_def;
@@ -1651,7 +1599,7 @@ std::unique_ptr<flexbuffers::Builder> WriteFlexOpOptions(
 
 class TensorFlowUnsupported : public BaseOperator {
  public:
-  TensorFlowUnsupported(const string& name, OperatorType type,
+  TensorFlowUnsupported(const std::string& name, OperatorType type,
                         bool enable_select_tf_ops)
       : BaseOperator(name, type), enable_select_tf_ops_(enable_select_tf_ops) {}
 
@@ -1730,7 +1678,7 @@ class TensorFlowUnsupported : public BaseOperator {
         case tensorflow::AttrValue::kList:
           if (attr.list().s_size() > 0) {
             auto start = fbb->StartVector(key);
-            for (const string& v : attr.list().s()) {
+            for (const std::string& v : attr.list().s()) {
               fbb->Add(v);
             }
             fbb->EndVector(start, /*typed=*/true, /*fixed=*/false);
@@ -1778,30 +1726,27 @@ class TensorFlowUnsupported : public BaseOperator {
     for (size_t i = 0; i < keys.size(); ++i) {
       const auto key = keys[i].AsKey();
       const auto& value = m[key];
-      // TODO(wvo): hack to make this code compile with 2 different API
-      // versions.
-      // Please remove once OS/internal versions are in sync.
-      // See hardcoded values in the switch below.
       switch (value.GetType()) {
-        case 5:  // flexbuffers::FBT_STRING:
+        case flexbuffers::FBT_STRING:
           (*attr)[key].set_s(value.AsString().c_str());
           break;
-        case 1:  // flexbuffers::FBT_INT:
+        case flexbuffers::FBT_INT:
           (*attr)[key].set_i(value.AsInt64());
           break;
-        case 3:  // flexbuffers::FBT_FLOAT:
+        case flexbuffers::FBT_FLOAT:
           (*attr)[key].set_f(value.AsFloat());
           break;
-        case 26:  // flexbuffers::FBT_BOOL:
+        case flexbuffers::FBT_BOOL:
           (*attr)[key].set_b(value.AsBool());
-          if (string(key) == "_output_quantized") {
+          if (std::string(key) == "_output_quantized") {
             op->quantized = value.AsBool();
           }
-          if (string(key) == "_support_output_type_float_in_quantized_op") {
+          if (std::string(key) ==
+              "_support_output_type_float_in_quantized_op") {
             op->support_output_type_float_in_quantized_op = value.AsBool();
           }
           break;
-        case 11: {  // flexbuffers::FBT_VECTOR_INT: {
+        case flexbuffers::FBT_VECTOR_INT: {
           auto* list = (*attr)[key].mutable_list();
           const auto& vector = value.AsTypedVector();
           for (size_t i = 0; i < vector.size(); i++) {
@@ -1809,7 +1754,7 @@ class TensorFlowUnsupported : public BaseOperator {
           }
           break;
         }
-        case 13: {  // flexbuffers::FBT_VECTOR_FLOAT: {
+        case flexbuffers::FBT_VECTOR_FLOAT: {
           auto* list = (*attr)[key].mutable_list();
           const auto& vector = value.AsTypedVector();
           for (size_t i = 0; i < vector.size(); i++) {
@@ -1817,7 +1762,7 @@ class TensorFlowUnsupported : public BaseOperator {
           }
           break;
         }
-        case 15: {  // flexbuffers::FBT_VECTOR_STRING: {
+        case 15 /* TO_DO(wvo): flexbuffers::FBT_VECTOR_STRING_DEPRECATED*/: {
           auto* list = (*attr)[key].mutable_list();
           const auto& vector = value.AsTypedVector();
           for (size_t i = 0; i < vector.size(); i++) {
@@ -1858,15 +1803,26 @@ class Dequantize
 
   void ReadOptions(const TfLiteOptions& options,
                    TocoOperator* op) const override {}
+};
 
-  int GetVersion(const OperatorSignature& op_signature) const override {
-    const string& input_name = op_signature.op->inputs[0];
-    const Array& input_array = op_signature.model->GetArray(input_name);
-    // Version 2 supports signed int8 input types.
-    if (input_array.data_type == ArrayDataType::kInt8) {
-      return 2;
-    }
-    return 1;
+class ReverseSequence
+    : public BuiltinOperator<ReverseSequenceOperator,
+                             ::tflite::ReverseSequenceOptions,
+                             ::tflite::BuiltinOptions_ReverseSequenceOptions> {
+ public:
+  using BuiltinOperator::BuiltinOperator;
+
+  flatbuffers::Offset<TfLiteOptions> WriteOptions(
+      const TocoOperator& op,
+      flatbuffers::FlatBufferBuilder* builder) const override {
+    return ::tflite::CreateReverseSequenceOptions(*builder, op.seq_dim,
+                                                  op.batch_dim);
+  }
+
+  void ReadOptions(const TfLiteOptions& options,
+                   TocoOperator* op) const override {
+    op->seq_dim = options.seq_dim();
+    op->batch_dim = options.batch_dim();
   }
 };
 
@@ -1879,6 +1835,8 @@ std::vector<std::unique_ptr<BaseOperator>> BuildOperatorList(
   // Builtin Operators.
   ops.push_back(
       MakeUnique<Add>(::tflite::BuiltinOperator_ADD, OperatorType::kAdd));
+  ops.push_back(
+      MakeUnique<AddN>(::tflite::BuiltinOperator_ADD_N, OperatorType::kAddN));
   ops.push_back(
       MakeUnique<Div>(::tflite::BuiltinOperator_DIV, OperatorType::kDiv));
   ops.push_back(
@@ -1905,6 +1863,8 @@ std::vector<std::unique_ptr<BaseOperator>> BuildOperatorList(
                                  OperatorType::kFullyConnected));
   ops.push_back(MakeUnique<Gather>(::tflite::BuiltinOperator_GATHER,
                                    OperatorType::kGather));
+  ops.push_back(MakeUnique<GatherNd>(::tflite::BuiltinOperator_GATHER_ND,
+                                     OperatorType::kGatherNd));
   ops.push_back(
       MakeUnique<L2Normalization>(::tflite::BuiltinOperator_L2_NORMALIZATION,
                                   OperatorType::kL2Normalization));
@@ -1928,6 +1888,8 @@ std::vector<std::unique_ptr<BaseOperator>> BuildOperatorList(
                                     OperatorType::kSoftmax));
   ops.push_back(MakeUnique<SpaceToDepth>(
       ::tflite::BuiltinOperator_SPACE_TO_DEPTH, OperatorType::kSpaceToDepth));
+  ops.push_back(MakeUnique<DepthToSpace>(
+      ::tflite::BuiltinOperator_DEPTH_TO_SPACE, OperatorType::kDepthToSpace));
   ops.push_back(
       MakeUnique<Svdf>(::tflite::BuiltinOperator_SVDF, OperatorType::kSvdf));
   ops.push_back(MakeUnique<Transpose>(::tflite::BuiltinOperator_TRANSPOSE,
@@ -2007,10 +1969,16 @@ std::vector<std::unique_ptr<BaseOperator>> BuildOperatorList(
   ops.push_back(MakeUnique<UnidirectionalSequenceRnn>(
       ::tflite::BuiltinOperator_UNIDIRECTIONAL_SEQUENCE_RNN,
       OperatorType::kUnidirectionalSequenceRnn));
-
-  // Custom Operators.
   ops.push_back(
-      MakeUnique<DepthToSpace>("DEPTH_TO_SPACE", OperatorType::kDepthToSpace));
+      MakeUnique<Where>(::tflite::BuiltinOperator_WHERE, OperatorType::kWhere));
+  ops.push_back(
+      MakeUnique<ReverseSequence>(::tflite::BuiltinOperator_REVERSE_SEQUENCE,
+                                  OperatorType::kReverseSequence));
+  ops.push_back(MakeUnique<SimpleOperator<MatrixDiagOperator>>(
+      ::tflite::BuiltinOperator_MATRIX_DIAG, OperatorType::kMatrixDiag));
+  ops.push_back(MakeUnique<SimpleOperator<MatrixSetDiagOperator>>(
+      ::tflite::BuiltinOperator_MATRIX_SET_DIAG, OperatorType::kMatrixSetDiag));
+  // Custom Operators.
   ops.push_back(MakeUnique<CTCBeamSearchDecoder>(
       "CTC_BEAM_SEARCH_DECODER", OperatorType::kCTCBeamSearchDecoder));
   ops.push_back(MakeUnique<TensorFlowUnsupported>("TENSORFLOW_UNSUPPORTED",
@@ -2022,84 +1990,100 @@ std::vector<std::unique_ptr<BaseOperator>> BuildOperatorList(
   // when custom ops are exported but SimpleOperator bypasses thoses. To
   // prevent user confusion we are settling on using SimpleOperator only for
   // builtins.
-  ops.push_back(
-      MakeUnique<SimpleOperator<FloorOperator>>("FLOOR", OperatorType::kFloor));
-  ops.push_back(
-      MakeUnique<SimpleOperator<CeilOperator>>("CEIL", OperatorType::kCeil));
-  ops.push_back(
-      MakeUnique<SimpleOperator<ReluOperator>>("RELU", OperatorType::kRelu));
+  ops.push_back(MakeUnique<SimpleOperator<FloorOperator>>(
+      ::tflite::BuiltinOperator_FLOOR, OperatorType::kFloor));
+  ops.push_back(MakeUnique<SimpleOperator<CeilOperator>>(
+      ::tflite::BuiltinOperator_CEIL, OperatorType::kCeil));
+  ops.push_back(MakeUnique<SimpleOperator<EluOperator>>(
+      ::tflite::BuiltinOperator_ELU, OperatorType::kElu));
+  ops.push_back(MakeUnique<SimpleOperator<RoundOperator>>(
+      ::tflite::BuiltinOperator_ROUND, OperatorType::kRound));
+  ops.push_back(MakeUnique<SimpleOperator<ReluOperator>>(
+      ::tflite::BuiltinOperator_RELU, OperatorType::kRelu));
   ops.push_back(MakeUnique<SimpleOperator<Relu1Operator>>(
-      "RELU_N1_TO_1", OperatorType::kRelu1));
-  ops.push_back(
-      MakeUnique<SimpleOperator<Relu6Operator>>("RELU6", OperatorType::kRelu6));
-  ops.push_back(
-      MakeUnique<SimpleOperator<PReluOperator>>("PRELU", OperatorType::kPRelu));
+      ::tflite::BuiltinOperator_RELU_N1_TO_1, OperatorType::kRelu1));
+  ops.push_back(MakeUnique<SimpleOperator<Relu6Operator>>(
+      ::tflite::BuiltinOperator_RELU6, OperatorType::kRelu6));
+  ops.push_back(MakeUnique<SimpleOperator<PReluOperator>>(
+      ::tflite::BuiltinOperator_PRELU, OperatorType::kPRelu));
   ops.push_back(MakeUnique<SimpleOperator<LogisticOperator>>(
-      "LOGISTIC", OperatorType::kLogistic));
-  ops.push_back(
-      MakeUnique<SimpleOperator<TanhOperator>>("TANH", OperatorType::kTanh));
-  ops.push_back(
-      MakeUnique<SimpleOperator<ExpOperator>>("EXP", OperatorType::kExp));
+      ::tflite::BuiltinOperator_LOGISTIC, OperatorType::kLogistic));
+  ops.push_back(MakeUnique<SimpleOperator<TanhOperator>>(
+      ::tflite::BuiltinOperator_TANH, OperatorType::kTanh));
+  ops.push_back(MakeUnique<SimpleOperator<ExpOperator>>(
+      ::tflite::BuiltinOperator_EXP, OperatorType::kExp));
+  ops.push_back(MakeUnique<SimpleOperator<CosOperator>>(
+      ::tflite::BuiltinOperator_COS, OperatorType::kCos));
   ops.push_back(MakeUnique<SimpleOperator<LogSoftmaxOperator>>(
-      "LOG_SOFTMAX", OperatorType::kLogSoftmax));
+      ::tflite::BuiltinOperator_LOG_SOFTMAX, OperatorType::kLogSoftmax));
   ops.push_back(MakeUnique<SimpleOperator<TensorFlowMaximumOperator>>(
-      "MAXIMUM", OperatorType::kMaximum));  //  Element-wise Maximum
+      ::tflite::BuiltinOperator_MAXIMUM, OperatorType::kMaximum));
   ops.push_back(MakeUnique<SimpleOperator<TensorFlowMinimumOperator>>(
-      "MINIMUM", OperatorType::kMinimum));  //  Element-wise Minimum
+      ::tflite::BuiltinOperator_MINIMUM, OperatorType::kMinimum));
   ops.push_back(MakeUnique<SimpleOperator<TensorFlowGreaterOperator>>(
-      "GREATER", OperatorType::kGreater));
+      ::tflite::BuiltinOperator_GREATER, OperatorType::kGreater));
   ops.push_back(MakeUnique<SimpleOperator<TensorFlowGreaterEqualOperator>>(
-      "GREATER_EQUAL", OperatorType::kGreaterEqual));
+      ::tflite::BuiltinOperator_GREATER_EQUAL, OperatorType::kGreaterEqual));
   ops.push_back(MakeUnique<SimpleOperator<TensorFlowLessOperator>>(
-      "LESS", OperatorType::kLess));
+      ::tflite::BuiltinOperator_LESS, OperatorType::kLess));
   ops.push_back(MakeUnique<SimpleOperator<TensorFlowLessEqualOperator>>(
-      "LESS_EQUAL", OperatorType::kLessEqual));
+      ::tflite::BuiltinOperator_LESS_EQUAL, OperatorType::kLessEqual));
   ops.push_back(MakeUnique<SimpleOperator<TensorFlowEqualOperator>>(
-      "EQUAL", OperatorType::kEqual));
+      ::tflite::BuiltinOperator_EQUAL, OperatorType::kEqual));
   ops.push_back(MakeUnique<SimpleOperator<TensorFlowNotEqualOperator>>(
-      "NOT_EQUAL", OperatorType::kNotEqual));
-  ops.push_back(
-      MakeUnique<SimpleOperator<NegOperator>>("NEG", OperatorType::kNeg));
+      ::tflite::BuiltinOperator_NOT_EQUAL, OperatorType::kNotEqual));
+  ops.push_back(MakeUnique<SimpleOperator<NegOperator>>(
+      ::tflite::BuiltinOperator_NEG, OperatorType::kNeg));
   ops.push_back(MakeUnique<SimpleOperator<SelectOperator>>(
-      "SELECT", OperatorType::kSelect));
-  ops.push_back(
-      MakeUnique<SimpleOperator<SliceOperator>>("SLICE", OperatorType::kSlice));
-  ops.push_back(
-      MakeUnique<SimpleOperator<PowOperator>>("POW", OperatorType::kPow));
+      ::tflite::BuiltinOperator_SELECT, OperatorType::kSelect));
+  ops.push_back(MakeUnique<SimpleOperator<SliceOperator>>(
+      ::tflite::BuiltinOperator_SLICE, OperatorType::kSlice));
+  ops.push_back(MakeUnique<SimpleOperator<PowOperator>>(
+      ::tflite::BuiltinOperator_POW, OperatorType::kPow));
   ops.push_back(MakeUnique<SimpleOperator<LogicalOrOperator>>(
-      "LOGICAL_OR", OperatorType::kLogicalOr));
+      ::tflite::BuiltinOperator_LOGICAL_OR, OperatorType::kLogicalOr));
   ops.emplace_back(new SimpleOperator<LogicalAndOperator>(
-      "LOGICAL_AND", OperatorType::kLogicalAnd));
+      ::tflite::BuiltinOperator_LOGICAL_AND, OperatorType::kLogicalAnd));
   ops.emplace_back(new SimpleOperator<LogicalNotOperator>(
-      "LOGICAL_NOT", OperatorType::kLogicalNot));
+      ::tflite::BuiltinOperator_LOGICAL_NOT, OperatorType::kLogicalNot));
   ops.emplace_back(new SimpleOperator<FloorDivOperator>(
-      "FLOOR_DIV", OperatorType::kFloorDiv));
+      ::tflite::BuiltinOperator_FLOOR_DIV, OperatorType::kFloorDiv));
   ops.emplace_back(new SimpleOperator<FloorModOperator>(
-      "FLOOR_MOD", OperatorType::kFloorMod));
-  ops.emplace_back(
-      new SimpleOperator<RangeOperator>("RANGE", OperatorType::kRange));
+      ::tflite::BuiltinOperator_FLOOR_MOD, OperatorType::kFloorMod));
+  ops.emplace_back(new SimpleOperator<RangeOperator>(
+      ::tflite::BuiltinOperator_RANGE, OperatorType::kRange));
   // Element-wise operator
-  ops.push_back(
-      MakeUnique<SimpleOperator<SinOperator>>("SIN", OperatorType::kSin));
-  ops.push_back(
-      MakeUnique<SimpleOperator<LogOperator>>("LOG", OperatorType::kLog));
+  ops.push_back(MakeUnique<SimpleOperator<SinOperator>>(
+      ::tflite::BuiltinOperator_SIN, OperatorType::kSin));
+  ops.push_back(MakeUnique<SimpleOperator<LogOperator>>(
+      ::tflite::BuiltinOperator_LOG, OperatorType::kLog));
   ops.push_back(MakeUnique<SimpleOperator<TensorFlowSqrtOperator>>(
-      "SQRT", OperatorType::kSqrt));
+      ::tflite::BuiltinOperator_SQRT, OperatorType::kSqrt));
   ops.push_back(MakeUnique<SimpleOperator<TensorFlowRsqrtOperator>>(
-      "RSQRT", OperatorType::kRsqrt));
+      ::tflite::BuiltinOperator_RSQRT, OperatorType::kRsqrt));
   ops.push_back(MakeUnique<SimpleOperator<TensorFlowSquareOperator>>(
-      "SQUARE", OperatorType::kSquare));
+      ::tflite::BuiltinOperator_SQUARE, OperatorType::kSquare));
   ops.push_back(MakeUnique<SimpleOperator<TensorFlowZerosLikeOperator>>(
-      "ZEROS_LIKE", OperatorType::kZerosLike));
-  ops.push_back(
-      MakeUnique<SimpleOperator<AbsOperator>>("ABS", OperatorType::kAbs));
-  ops.push_back(
-      MakeUnique<SimpleOperator<FillOperator>>("FILL", OperatorType::kFill));
+      ::tflite::BuiltinOperator_ZEROS_LIKE, OperatorType::kZerosLike));
+  ops.push_back(MakeUnique<SimpleOperator<AbsOperator>>(
+      ::tflite::BuiltinOperator_ABS, OperatorType::kAbs));
+  ops.push_back(MakeUnique<SimpleOperator<HardSwishOperator>>(
+      ::tflite::BuiltinOperator_HARD_SWISH, OperatorType::kHardSwish));
+  ops.push_back(MakeUnique<SimpleOperator<FillOperator>>(
+      ::tflite::BuiltinOperator_FILL, OperatorType::kFill));
   ops.push_back(MakeUnique<SimpleOperator<ReverseV2Operator>>(
-      "REVERSE_V2", OperatorType::kReverseV2));
+      ::tflite::BuiltinOperator_REVERSE_V2, OperatorType::kReverseV2));
+  ops.push_back(MakeUnique<SimpleOperator<TensorFlowRankOperator>>(
+      ::tflite::BuiltinOperator_RANK, OperatorType::kRank));
+  ops.emplace_back(new SimpleOperator<SegmentSumOperator>(
+      ::tflite::BuiltinOperator_SEGMENT_SUM, OperatorType::kSegmentSum));
+  ops.emplace_back(MakeUnique<SimpleOperator<ScatterNdOperator>>(
+      ::tflite::BuiltinOperator_SCATTER_ND, OperatorType::kScatterNd));
   return ops;
 }
 }  // namespace
+
+// LINT.ThenChange(//tensorflow/lite/tools/versioning/op_version.cc)
 
 std::map<OperatorType, std::unique_ptr<BaseOperator>> BuildOperatorByTypeMap(
     bool enable_select_tf_ops) {
@@ -2114,9 +2098,9 @@ std::map<OperatorType, std::unique_ptr<BaseOperator>> BuildOperatorByTypeMap(
   return result;
 }
 
-std::map<string, std::unique_ptr<BaseOperator>> BuildOperatorByNameMap(
+std::map<std::string, std::unique_ptr<BaseOperator>> BuildOperatorByNameMap(
     bool enable_select_tf_ops) {
-  std::map<string, std::unique_ptr<BaseOperator>> result;
+  std::map<std::string, std::unique_ptr<BaseOperator>> result;
 
   std::vector<std::unique_ptr<BaseOperator>> ops =
       BuildOperatorList(enable_select_tf_ops);
@@ -2128,13 +2112,13 @@ std::map<string, std::unique_ptr<BaseOperator>> BuildOperatorByNameMap(
 }
 
 bool ShouldExportAsFlexOp(bool enable_select_tf_ops,
-                          const string& tensorflow_op_name) {
+                          const std::string& tensorflow_op_name) {
   // If Flex ops aren't allow at all, simply return false.
   if (!enable_select_tf_ops) {
     return false;
   }
   // Check if we can find the `OpDef` for the TensorFlow op. If we can find
-  // it and it has been whitelisted, export the op as an Flex op. Otherwise,
+  // it and it has been allowlisted, export the op as an Flex op. Otherwise,
   // export it as a regular custom op.
   const tensorflow::OpDef* op_def = nullptr;
   if (!tensorflow::OpRegistry::Global()
@@ -2143,9 +2127,9 @@ bool ShouldExportAsFlexOp(bool enable_select_tf_ops,
     return false;
   }
 
-  if (!IsWhitelistedFlexOp(tensorflow_op_name)) {
+  if (!::tflite::flex::IsAllowlistedFlexOp(tensorflow_op_name)) {
     LOG(WARNING) << "Op " << tensorflow_op_name
-                 << " is a valid TensorFlow op but has not been whitelisted for"
+                 << " is a valid TensorFlow op but has not been allowlisted for"
                     " the TensorFlow Lite flex op set.";
     return false;
   }

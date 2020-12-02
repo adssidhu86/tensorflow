@@ -24,7 +24,6 @@ limitations under the License.
 #include "tensorflow/compiler/tf2xla/shape_util.h"
 #include "tensorflow/compiler/tf2xla/type_util.h"
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
-#include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/xla/client/client_library.h"
 #include "tensorflow/compiler/xla/client/xla_builder.h"
 #include "tensorflow/compiler/xla/client/xla_computation.h"
@@ -45,8 +44,8 @@ const char XlaContext::kXlaContextResourceName[] = "_xla_context";
   // per-step context is looked up in the resource manager. The
   // JIT will prepopulate the JITContext.
   XlaContext* context;
-  TF_CHECK_OK(ctx->resource_manager()->Lookup(
-      ctx->step_container()->name(), kXlaContextResourceName, &context));
+  TF_CHECK_OK(ctx->step_container()->Lookup(ctx->resource_manager(),
+                                            kXlaContextResourceName, &context));
   // The resource manager handed us a fresh reference to 'context', but retains
   // a reference itself so the context won't be freed. The resource manager will
   // outlive the JIT compilation.
@@ -64,7 +63,8 @@ XlaContext::XlaContext(XlaCompiler* compiler, xla::XlaBuilder* builder)
 string XlaContext::DebugString() const { return "XLA JIT context"; }
 
 void XlaContext::SetRetval(int index, const XlaExpression& expression) {
-  if (retvals_.size() <= index) {
+  const int64 retvals_size = retvals_.size();
+  if (retvals_size <= index) {
     retvals_.resize(index + 1);
   }
   retvals_[index] = expression;
@@ -76,7 +76,7 @@ XlaResource* XlaContext::AddResource(std::unique_ptr<XlaResource> resource) {
 }
 
 const xla::XlaComputation* XlaContext::GetOrCreateMax(const DataType type) {
-  return LookupOrCreate(type, &max_func_, [this, type] {
+  return LookupOrCreate(type, &max_func_, [type] {
     const string type_string = DataTypeString(type);
     VLOG(1) << "Building Max() for " << type_string;
     xla::XlaBuilder b("max<" + type_string + ">");
@@ -92,7 +92,7 @@ const xla::XlaComputation* XlaContext::GetOrCreateMax(const DataType type) {
 }
 
 const xla::XlaComputation* XlaContext::GetOrCreateMin(const DataType type) {
-  return LookupOrCreate(type, &min_func_, [this, type] {
+  return LookupOrCreate(type, &min_func_, [type] {
     const string type_string = DataTypeString(type);
     VLOG(1) << "Building Min() for " << type_string;
     xla::XlaBuilder b("min<" + type_string + ">");
@@ -108,7 +108,7 @@ const xla::XlaComputation* XlaContext::GetOrCreateMin(const DataType type) {
 }
 
 const xla::XlaComputation* XlaContext::GetOrCreateAdd(const DataType type) {
-  return LookupOrCreate(type, &add_func_, [this, type] {
+  return LookupOrCreate(type, &add_func_, [type] {
     const string type_string = DataTypeString(type);
     VLOG(1) << "Building Add() for " << type_string;
     xla::XlaBuilder b("add<" + type_string + ">");
@@ -124,7 +124,7 @@ const xla::XlaComputation* XlaContext::GetOrCreateAdd(const DataType type) {
 }
 
 const xla::XlaComputation* XlaContext::GetOrCreateMul(const DataType type) {
-  return LookupOrCreate(type, &mul_func_, [this, type] {
+  return LookupOrCreate(type, &mul_func_, [type] {
     const string type_string = DataTypeString(type);
     VLOG(1) << "Building Mul() for " << type_string;
     xla::XlaBuilder b("mul<" + type_string + ">");

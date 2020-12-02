@@ -89,8 +89,8 @@ int BitWidth(PrimitiveType type) {
     case TUPLE:
       LOG(FATAL) << "TUPLE is an invalid type for BitWidth";
 
-    case OPAQUE:
-      LOG(FATAL) << "OPAQUE is an invalid type for BitWidth";
+    case OPAQUE_TYPE:
+      LOG(FATAL) << "OPAQUE_TYPE is an invalid type for BitWidth";
 
     default:
       LOG(FATAL) << "Unhandled primitive type " << type;
@@ -112,6 +112,21 @@ xla::PrimitiveType UnsignedIntegralTypeForBitWidth(int64 src_bitwidth) {
   }
 }
 
+xla::PrimitiveType SignedIntegralTypeForBitWidth(int64 src_bitwidth) {
+  switch (src_bitwidth) {
+    case 8:
+      return xla::S8;
+    case 16:
+      return xla::S16;
+    case 32:
+      return xla::S32;
+    case 64:
+      return xla::S64;
+    default:
+      return xla::PRIMITIVE_TYPE_INVALID;
+  }
+}
+
 PrimitiveType ComplexComponentType(PrimitiveType complex_type) {
   switch (complex_type) {
     case C64:
@@ -126,17 +141,22 @@ PrimitiveType ComplexComponentType(PrimitiveType complex_type) {
 
 bool IsArrayType(PrimitiveType primitive_type) {
   return primitive_type != PRIMITIVE_TYPE_INVALID && primitive_type != TUPLE &&
-         primitive_type != OPAQUE && primitive_type != TOKEN;
+         primitive_type != OPAQUE_TYPE && primitive_type != TOKEN;
 }
 
 // Class to memoize the computation of
 //   absl::AsciiStrToLower(PrimitiveType_Name(p))
 // for all PrimitiveType values "p"
+//
+// xla::OPAQUE_TYPE canonically maps to the string "opaque" -- the only reason
+// it's called OPAQUE_TYPE is to avoid clashing with a windows.h macro.
 class PrimitiveTypeNameGenerator {
  public:
   PrimitiveTypeNameGenerator() {
     for (int i = 0; i < PrimitiveType_ARRAYSIZE; i++) {
-      if (PrimitiveType_IsValid(i)) {
+      if (i == static_cast<int>(OPAQUE_TYPE)) {
+        lowercase_name_[i] = "opaque";
+      } else if (PrimitiveType_IsValid(i)) {
         lowercase_name_[i] = absl::AsciiStrToLower(
             PrimitiveType_Name(static_cast<PrimitiveType>(i)));
       }
@@ -158,6 +178,9 @@ const string& LowercasePrimitiveTypeName(PrimitiveType s) {
 namespace {
 
 // Returns a map from lower-case primitive type name to primitive type.
+//
+// Due to Postel's Law considerations, both "opaque" and "opaque_type" map to
+// the xla::OPAQUE_TYPE enumerator.
 const std::unordered_map<string, PrimitiveType>& GetPrimitiveTypeStringMap() {
   static std::unordered_map<string, PrimitiveType>* name_to_type = [] {
     static auto* map = new std::unordered_map<string, PrimitiveType>;
@@ -167,6 +190,7 @@ const std::unordered_map<string, PrimitiveType>& GetPrimitiveTypeStringMap() {
         (*map)[LowercasePrimitiveTypeName(value)] = value;
       }
     }
+    (*map)["opaque"] = OPAQUE_TYPE;
     return map;
   }();
   return *name_to_type;

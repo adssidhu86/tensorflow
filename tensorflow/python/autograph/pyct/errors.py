@@ -19,19 +19,11 @@ from __future__ import division
 from __future__ import print_function
 
 
-class AutoGraphError(Exception):
+class PyCTError(Exception):
+  """Base class for all exceptions."""
   pass
 
 
-class InternalError(AutoGraphError):
-
-  def __init__(self, message, original_exc):
-    super(InternalError, self).__init__()
-    self.message = message
-    self.original_exc = original_exc
-
-  def __str__(self):
-    return '{} during {}: {}'.format(
-        type(self.original_exc).__name__, self.message, self.original_exc)
-
-
+class UnsupportedLanguageElementError(PyCTError, NotImplementedError):
+  """Raised for code patterns that AutoGraph does not support."""
+  pass

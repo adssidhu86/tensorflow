@@ -19,6 +19,7 @@ limitations under the License.
 #include <vector>
 
 #include "tensorflow/compiler/xla/literal.h"
+#include "tensorflow/compiler/xla/protobuf_util.h"
 #include "tensorflow/compiler/xla/service/hlo_parser.h"
 #include "tensorflow/compiler/xla/shape_util.h"
 #include "tensorflow/compiler/xla/test.h"
@@ -75,6 +76,21 @@ TEST_F(HloShardingTest, DevicePlacement) {
   EXPECT_TRUE(shape_tree.IsLeaf({}));
 }
 
+TEST_F(HloShardingTest, ProtoRoundTrip) {
+  OpSharding proto;
+  proto.set_type(OpSharding::TUPLE);
+  auto tiled = proto.add_tuple_shardings();
+  tiled->set_type(OpSharding::OTHER);
+  tiled->add_tile_assignment_devices(0);
+  tiled->add_tile_assignment_devices(1);
+  tiled->add_tile_assignment_dimensions(1);
+  tiled->add_tile_assignment_dimensions(2);
+  proto.add_tuple_shardings()->set_type(OpSharding::REPLICATED);
+  proto.add_tuple_shardings()->set_type(OpSharding::MANUAL);
+  HloSharding sharding = HloSharding::FromProto(proto).ConsumeValueOrDie();
+  EXPECT_TRUE(protobuf_util::ProtobufEquals(proto, sharding.ToProto()));
+}
+
 TEST_F(HloShardingTest, Tile) {
   {
     // Test should fail because of a duplicate tile assignment.
@@ -84,7 +100,7 @@ TEST_F(HloShardingTest, Tile) {
   }
 
   {
-    // Test should fail because of more devices used then `num_device`.
+    // Test should fail because of more devices used than `num_device`.
     HloSharding sharding = HloSharding::Tile(MakeArray({2, 2}, {0, 1, 2, 3}));
     EXPECT_IS_NOT_OK(sharding.Validate(ShapeUtil::MakeShape(U32, {4, 6}),
                                        /*num_devices=*/2));
@@ -132,7 +148,7 @@ TEST_F(HloShardingTest, NestedTuple) {
 
   HloSharding tiled_sharding = HloSharding::Tile(Array<int64>({{0, 1}}));
   OpSharding proto;
-  proto.set_type(OpSharding::Type::OpSharding_Type_TUPLE);
+  proto.set_type(OpSharding::TUPLE);
   *proto.add_tuple_shardings() = HloSharding::Replicate().ToProto();
   *proto.add_tuple_shardings() = HloSharding::AssignDevice(0).ToProto();
   *proto.add_tuple_shardings() = tiled_sharding.ToProto();

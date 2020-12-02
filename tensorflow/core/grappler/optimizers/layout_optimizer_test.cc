@@ -14,10 +14,13 @@ limitations under the License.
 ==============================================================================*/
 
 #include "tensorflow/core/grappler/optimizers/layout_optimizer.h"
+
 #include "tensorflow/cc/ops/standard_ops.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
+#include "tensorflow/core/framework/kernel_shape_util.h"
 #include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/framework/tensor_testutil.h"
+#include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/grappler/clusters/single_machine.h"
 #include "tensorflow/core/grappler/clusters/virtual_cluster.h"
 #include "tensorflow/core/grappler/costs/virtual_placer.h"
@@ -54,11 +57,13 @@ class LayoutOptimizerTest : public GrapplerTest {
 
   void TearDown() override { TF_CHECK_OK(virtual_cluster_->Shutdown()); }
 
+  template <typename T = float>
   Output SimpleConv2D(tensorflow::Scope* s, int input_size, int filter_size,
                       const string& padding) {
-    return SimpleConv2D(s, input_size, filter_size, padding, "");
+    return SimpleConv2D<T>(s, input_size, filter_size, padding, "");
   }
 
+  template <typename T = float>
   Output SimpleConv2D(tensorflow::Scope* s, int input_size, int filter_size,
                       const string& padding, const string& device) {
     int batch_size = 8;
@@ -69,21 +74,22 @@ class LayoutOptimizerTest : public GrapplerTest {
     int stride = 1;
     TensorShape input_shape(
         {batch_size, input_height, input_width, input_depth});
-    Tensor input_data(DT_FLOAT, input_shape);
-    test::FillIota<float>(&input_data, 1.0f);
+    Tensor input_data(DataTypeToEnum<T>::value, input_shape);
+    test::FillIota<T>(&input_data, static_cast<T>(1));
     Output input =
         ops::Const(s->WithOpName("Input"), Input::Initializer(input_data));
 
     TensorShape filter_shape(
         {filter_size, filter_size, input_depth, filter_count});
-    Tensor filter_data(DT_FLOAT, filter_shape);
-    test::FillIota<float>(&filter_data, 1.0f);
+    Tensor filter_data(DataTypeToEnum<T>::value, filter_shape);
+    test::FillIota<T>(&filter_data, static_cast<T>(1));
     Output filter =
         ops::Const(s->WithOpName("Filter"), Input::Initializer(filter_data));
 
     ops::Conv2D::Attrs attrs;
+    const int kExplicitPaddings[] = {0, 0, 1, 2, 3, 4, 0, 0};
     if (padding == "EXPLICIT") {
-      attrs = attrs.ExplicitPaddings({0, 0, 1, 2, 3, 4, 0, 0});
+      attrs = attrs.ExplicitPaddings(kExplicitPaddings);
     }
 
     Output conv = ops::Conv2D(s->WithOpName("Conv2D").WithDevice(device), input,
@@ -354,6 +360,20 @@ TEST_F(LayoutOptimizerTest, ExplicitPadding) {
   Status status = optimizer.Optimize(virtual_cluster_.get(), item, &output);
   NodeMap node_map(&output);
   EXPECT_TRUE(node_map.GetNode("Conv2D-0-TransposeNHWCToNCHW-LayoutOptimizer"));
+}
+
+TEST_F(LayoutOptimizerTest, DataTypeIsInt32) {
+  tensorflow::Scope s = tensorflow::Scope::NewRootScope();
+  auto conv = SimpleConv2D<int32>(&s, 4, 2, "EXPLICIT");
+  Output fetch = ops::Identity(s.WithOpName("Fetch"), {conv});
+  GrapplerItem item;
+  TF_CHECK_OK(s.ToGraphDef(&item.graph));
+  LayoutOptimizer optimizer;
+  GraphDef output;
+  Status status = optimizer.Optimize(virtual_cluster_.get(), item, &output);
+  NodeMap node_map(&output);
+  EXPECT_FALSE(
+      node_map.GetNode("Conv2D-0-TransposeNHWCToNCHW-LayoutOptimizer"));
 }
 
 TEST_F(LayoutOptimizerTest, Pad) {
@@ -1223,7 +1243,7 @@ TEST_F(LayoutOptimizerTest, DevicePlacement) {
   auto i = ops::Identity(s.WithOpName("i"), shape);
   GrapplerItem item;
   TF_CHECK_OK(s.ToGraphDef(&item.graph));
-  VirtualPlacer virtual_placer(virtual_cluster_.get());
+  VirtualPlacer virtual_placer(virtual_cluster_->GetDevices());
   for (auto& node : *item.graph.mutable_node()) {
     string device = virtual_placer.get_canonical_device_name(node);
     node.set_device(device);
@@ -1235,6 +1255,42 @@ TEST_F(LayoutOptimizerTest, DevicePlacement) {
   auto vec_permute =
       node_map.GetNode("s-0-0-VecPermuteNCHWToNHWC-LayoutOptimizer");
   EXPECT_EQ(vec_permute->attr().at("_kernel").s(), "host");
+}
+
+TEST_F(LayoutOptimizerTest, PermConstWithDevice) {
+  tensorflow::Scope s = tensorflow::Scope::NewRootScope();
+  const string worker0_gpu0 = "/job:w/replica:0/task:0/device:gpu:0";
+  const string worker1_gpu1 = "/job:w/replica:0/task:1/device:gpu:1";
+  const string worker0_node_prefix = "job_w_replica_0_task_0_device_gpu_0-";
+  const string worker1_node_prefix = "job_w_replica_0_task_1_device_gpu_1-";
+  const string perm_nchw2nhwc_str = "PermConstNCHWToNHWC-LayoutOptimizer";
+  const string perm_nhwc2nchw_str = "PermConstNHWCToNCHW-LayoutOptimizer";
+  auto conv_0 = SimpleConv2D(&s, 4, 2, "VALID", worker0_gpu0);
+  auto shape_0 = ops::Shape(s.WithOpName("s"), conv_0);
+  auto i_0 = ops::Identity(s.WithOpName("i"), shape_0);
+  auto conv_1 = SimpleConv2D(&s, 4, 2, "VALID", worker1_gpu1);
+  auto shape_1 = ops::Shape(s.WithOpName("s"), conv_1);
+  auto i_1 = ops::Identity(s.WithOpName("i"), shape_1);
+  GrapplerItem item;
+  TF_CHECK_OK(s.ToGraphDef(&item.graph));
+  LayoutOptimizer optimizer;
+  GraphDef output;
+  Status status = optimizer.Optimize(virtual_cluster_.get(), item, &output);
+  NodeMap node_map(&output);
+  auto const_permute_0_0 =
+      node_map.GetNode(worker0_node_prefix + perm_nchw2nhwc_str);
+  auto const_permute_0_1 =
+      node_map.GetNode(worker0_node_prefix + perm_nhwc2nchw_str);
+  EXPECT_EQ(const_permute_0_0->device(), worker0_gpu0);
+  EXPECT_EQ(const_permute_0_1->device(), worker0_gpu0);
+  auto const_permute_1_0 =
+      node_map.GetNode(worker1_node_prefix + perm_nchw2nhwc_str);
+  auto const_permute_1_1 =
+      node_map.GetNode(worker1_node_prefix + perm_nhwc2nchw_str);
+  EXPECT_EQ(const_permute_1_0->device(), worker1_gpu1);
+  EXPECT_EQ(const_permute_1_1->device(), worker1_gpu1);
+  EXPECT_FALSE(node_map.GetNode(perm_nchw2nhwc_str));
+  EXPECT_FALSE(node_map.GetNode(perm_nhwc2nchw_str));
 }
 }  // namespace
 }  // namespace grappler

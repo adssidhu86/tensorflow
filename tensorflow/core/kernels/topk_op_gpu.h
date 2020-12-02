@@ -15,33 +15,34 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_KERNELS_TOPK_OP_GPU_H_
 #define TENSORFLOW_CORE_KERNELS_TOPK_OP_GPU_H_
 
-#if GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 #define EIGEN_USE_GPU
 
 #include <cmath>
+#include <string>
 #include <vector>
+
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
-#include "third_party/cub/device/device_segmented_radix_sort.cuh"
-#include "third_party/cub/iterator/counting_input_iterator.cuh"
-#include "third_party/cub/iterator/transform_input_iterator.cuh"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
+#include "tensorflow/core/kernels/gpu_prim.h"
 #include "tensorflow/core/kernels/topk_op.h"
 #include "tensorflow/core/lib/gtl/top_n.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/types.h"
-#include "tensorflow/core/util/cuda_kernel_helper.h"
+#include "tensorflow/core/util/gpu_kernel_helper.h"
 
+#if GOOGLE_CUDA
 // Required for sorting Eigen::half
 namespace cub {
 template <>
 struct NumericTraits<Eigen::half>
-    : BaseTraits<FLOATING_POINT, true, false, unsigned short int, Eigen::half> {
-};
+    : BaseTraits<FLOATING_POINT, true, false, uint16_t, Eigen::half> {};
 }  // namespace cub
+#endif  // GOOGLE_CUDA
 
 namespace tensorflow {
 
@@ -93,7 +94,6 @@ struct IndirectLinearData {
   Entry* const backing_data;
 };
 
-#if GOOGLE_CUDA
 template <typename T>
 struct StridedData {
   typedef impl::Entry<T> Entry;
@@ -107,7 +107,6 @@ struct StridedData {
 
   Entry* const data;
 };
-#endif
 
 // A heap of Entry<T> that can either work as a min-heap or as a max-heap.
 template <HeapType heapType, PreferIndices preferIndices,
@@ -115,6 +114,7 @@ template <HeapType heapType, PreferIndices preferIndices,
 struct IndexedHeap {
   typedef typename Data<T>::Entry Entry;
   const Data<T> data;
+  __device__ IndexedHeap(const Data<T>& d) : data(d) {}
 
   __device__ bool is_above(int left, int right) {
     T left_value = data.get_value(left);
@@ -337,11 +337,21 @@ __device__ void mergeShards(int num_shards, int k,
   }
 }
 
+#if GOOGLE_CUDA
 extern __shared__ char shared_memory[];
+#endif  // GOOGLE_CUDA
 
 template <typename T>
-__global__ void TopKKernel(const T* input, int length, int k, bool sorted,
-                           T* output, int* indices) {
+#if TENSORFLOW_USE_ROCM
+__attribute__((amdgpu_flat_work_group_size(1, 256)))
+#endif  // TENSORFLOW_USE_ROCM
+__global__ void
+TopKKernel(const T* __restrict__ input, int length, int k, bool sorted,
+           T* __restrict__ output, int* __restrict__ indices) {
+#if TENSORFLOW_USE_ROCM
+  HIP_DYNAMIC_SHARED(char, shared_memory);
+#endif  // TENSORFLOW_USE_ROCM
+
   const int batch_index = blockIdx.x;
   const T* batch_input = input + batch_index * length;
 
@@ -369,7 +379,7 @@ __global__ void TopKKernel(const T* input, int length, int k, bool sorted,
 }
 
 template <typename T>
-cudaError LaunchTopKKernel(const cudaStream_t& stream, int num_shards,
+cudaError LaunchTopKKernel(const gpuStream_t& stream, int num_shards,
                            const T* input, int batch_size, int length, int k,
                            bool sorted, T* output, int* indices) {
   // This code assumes that k is small enough that the computation
@@ -394,15 +404,24 @@ cudaError LaunchTopKKernel(const cudaStream_t& stream, int num_shards,
     }
     if (num_shards <= 0) {
       num_shards = 1;
+#if GOOGLE_CUDA
     } else if (num_shards > 1024) {
       num_shards = 1024;
     }
+#elif TENSORFLOW_USE_ROCM
+      // ROCm can't execute with 1024 and requires an explicit
+      // amdgpu_flat_work_group_size attribute with >256
+    } else if (num_shards > 256) {
+      num_shards = 256;
+    }
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
   }
   // We are limited by the amount of shared memory we have per block.
   auto shared_memory_size = (num_shards + 1) * k * sizeof(Entry<T>);
 
-  TopKKernel<<<batch_size, num_shards, shared_memory_size, stream>>>(
-      input, length, k, sorted, output, indices);
+  TF_CHECK_OK(GpuLaunchKernel(TopKKernel<T>, batch_size, num_shards,
+                              shared_memory_size, stream, input, length, k,
+                              sorted, output, indices));
   return cudaGetLastError();
 }
 
@@ -434,11 +453,11 @@ Status LaunchSortKernel(OpKernelContext* ctx, const T* input, int num_rows,
                         typename TTypes<T, 2>::Tensor values,
                         TTypes<int, 2>::Tensor indices) {
   const GPUDevice& d = ctx->eigen_device<GPUDevice>();
-  const cudaStream_t& cu_stream = GetCudaStream(ctx);
+  const auto& cu_stream = GetGpuStream(ctx);
   size_t temp_storage_bytes = -1;
 
-  // TODO(ebrevdo): Once cub supports iterators for ValueT replace that tensor
-  // with an iterator that directly returns the correct value.
+  // TODO(ebrevdo): Once gpuprim supports iterators for ValueT replace that
+  // tensor with an iterator that directly returns the correct value.
   Tensor input_indices;
   TF_RETURN_IF_ERROR(ctx->allocate_temp(
       DT_INT32, TensorShape({num_rows, num_cols}), &input_indices));
@@ -446,9 +465,9 @@ Status LaunchSortKernel(OpKernelContext* ctx, const T* input, int num_rows,
   input_indices_t.device(d) =
       input_indices_t.generate(ColumnIndexCreator(num_cols));
 
-  cub::CountingInputIterator<int> counting_iter(0);
-  cub::TransformInputIterator<int, SegmentOffsetCreator,
-                              cub::CountingInputIterator<int>>
+  gpuprim::CountingInputIterator<int> counting_iter(0);
+  gpuprim::TransformInputIterator<int, SegmentOffsetCreator,
+                                  gpuprim::CountingInputIterator<int>>
       segment_offsets_t(counting_iter, SegmentOffsetCreator(num_cols));
 
   Tensor temp_values;
@@ -470,7 +489,7 @@ Status LaunchSortKernel(OpKernelContext* ctx, const T* input, int num_rows,
     sorted_values_ptr = temp_values.flat<T>().data();
   }
 
-  auto err = cub::DeviceSegmentedRadixSort::SortPairsDescending(
+  auto err = gpuprim::DeviceSegmentedRadixSort::SortPairsDescending(
       /* d_temp_storage */ nullptr,
       /* temp_storage_bytes */ temp_storage_bytes,
       /* d_keys_in */ input,
@@ -487,7 +506,7 @@ Status LaunchSortKernel(OpKernelContext* ctx, const T* input, int num_rows,
   if (err != cudaSuccess) {
     return errors::Internal(
         "TopKOp: Could not launch "
-        "cub::DeviceSegmentedRadixSort::SortPairsDescending to calculate "
+        "gpuprim::DeviceSegmentedRadixSort::SortPairsDescending to calculate "
         "temp_storage_bytes, status: ",
         cudaGetErrorString(err));
   }
@@ -495,7 +514,7 @@ Status LaunchSortKernel(OpKernelContext* ctx, const T* input, int num_rows,
   TF_RETURN_IF_ERROR(ctx->allocate_temp(
       DT_INT8, TensorShape({static_cast<int64>(temp_storage_bytes)}),
       &temp_storage));
-  err = cub::DeviceSegmentedRadixSort::SortPairsDescending(
+  err = gpuprim::DeviceSegmentedRadixSort::SortPairsDescending(
       /* d_temp_storage */ temp_storage.flat<int8>().data(),
       /* temp_storage_bytes */ temp_storage_bytes,
       /* d_keys_in */ input,
@@ -512,7 +531,7 @@ Status LaunchSortKernel(OpKernelContext* ctx, const T* input, int num_rows,
   if (err != cudaSuccess) {
     return errors::Internal(
         "TopKOp: Could not launch "
-        "cub::DeviceSegmentedRadixSort::SortPairsDescending to sort input, "
+        "gpuprim::DeviceSegmentedRadixSort::SortPairsDescending to sort input, "
         "temp_storage_bytes: ",
         temp_storage_bytes, ", status: ", cudaGetErrorString(err));
   }
@@ -541,14 +560,14 @@ struct TopKFunctor<GPUDevice, T> {
           const int64 num_cols, typename TTypes<T, 2>::Tensor values,
           typename TTypes<int, 2>::Tensor indices) {
     // For small k, use the heap implementation.  For larger k, use
-    // the in-place cub sort.  For k == num_cols, always use the
-    // in-place cub sort.  The thresholds for n and k were determined
+    // the in-place gpuprim sort.  For k == num_cols, always use the
+    // in-place gpuprim sort.  The thresholds for n and k were determined
     // empirically.
     if (num_cols <= 1000 || k == num_cols || k >= 100) {
       return impl::LaunchSortKernel(context, input.data(), num_rows, num_cols,
                                     k, values, indices);
     } else {
-      const cudaStream_t& cu_stream = GetCudaStream(context);
+      const auto& cu_stream = GetGpuStream(context);
       auto err = impl::LaunchTopKKernel(cu_stream, /* num_shards */ 0,
                                         input.data(), num_rows, num_cols, k,
                                         sorted, values.data(), indices.data());
@@ -565,6 +584,6 @@ struct TopKFunctor<GPUDevice, T> {
 }  // end namespace functor
 }  // namespace tensorflow
 
-#endif  // GOOGLE_CUDA
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 #endif  // TENSORFLOW_CORE_KERNELS_TOPK_OP_GPU_H_

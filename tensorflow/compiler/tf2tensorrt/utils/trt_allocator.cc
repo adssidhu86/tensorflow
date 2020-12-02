@@ -17,11 +17,9 @@ limitations under the License.
 
 #include "tensorflow/core/platform/logging.h"
 
-#if GOOGLE_CUDA
-#if GOOGLE_TENSORRT
-#include "cuda/include/cuda_runtime_api.h"
-#endif  // GOOGLE_TENSORRT
-#endif  // GOOGLE_CUDA
+#if GOOGLE_CUDA && GOOGLE_TENSORRT
+#include "third_party/gpus/cuda/include/cuda_runtime_api.h"
+#endif  // GOOGLE_CUDA && GOOGLE_TENSORRT
 
 namespace tensorflow {
 namespace tensorrt {
@@ -52,27 +50,16 @@ void* Align(uint64_t alignment, uint64_t size, void*& ptr, uint64_t& space) {
 }  // namespace tensorrt
 }  // namespace tensorflow
 
-#if GOOGLE_CUDA
-#if GOOGLE_TENSORRT
+#if GOOGLE_CUDA && GOOGLE_TENSORRT
 
 namespace tensorflow {
 namespace tensorrt {
-
-void* TRTCudaAllocator::allocate(uint64_t size, uint64_t alignment,
-                                 uint32_t flags) {
-  assert((alignment & (alignment - 1)) == 0);  // zero or a power of 2.
-  void* memory;
-  cudaMalloc(&memory, size);
-  return memory;
-}
-
-void TRTCudaAllocator::free(void* memory) { cudaFree(memory); }
 
 void* TRTDeviceAllocator::allocate(uint64_t size, uint64_t alignment,
                                    uint32_t flags) {
   if (size == 0) return nullptr;
   // WAR for allocator alignment requirement. Certain cuda API calls require GPU
-  // memory with alignemtn to cudaDeviceProp::textureAlignment.
+  // memory with alignment to cudaDeviceProp::textureAlignment.
   // See issue #20856
   alignment = 512;
   assert((alignment & (alignment - 1)) == 0);  // zero or a power of 2.
@@ -80,7 +67,15 @@ void* TRTDeviceAllocator::allocate(uint64_t size, uint64_t alignment,
   // TODO(aaroey): AllocateRaw takes size_t size as input, so it'll produce
   // unexpected result when TRT tries to allocate more bytes than size_t can
   // carry. Fix this.
-  void* mem = allocator_->AllocateRaw(alignment, total_size);
+  //
+  // Fail immediately if allocation fails, rather than waiting 10 seconds and
+  // failing then anyway.
+  // TensorRT 7 can also switch to a different algorithm for a layer if an
+  // algorithm uses too much memory. If we don't fail immediately building the
+  // engine can be *very* slow with TensorRT7 when GPU memory is limited.
+  AllocationAttributes attributes;
+  attributes.retry_on_failure = false;
+  void* mem = allocator_->AllocateRaw(alignment, total_size, attributes);
   if (!mem) return nullptr;
 
   void* alloc_mem = mem;
@@ -94,7 +89,7 @@ void* TRTDeviceAllocator::allocate(uint64_t size, uint64_t alignment,
   return mem;
 }
 
-TRTDeviceAllocator::TRTDeviceAllocator(tensorflow::Allocator* allocator)
+TRTDeviceAllocator::TRTDeviceAllocator(Allocator* allocator)
     : allocator_(allocator) {
   VLOG(1) << "Using " << allocator->Name() << " allocator from TensorFlow";
 }
@@ -115,5 +110,4 @@ void TRTDeviceAllocator::free(void* memory) {
 }  // namespace tensorrt
 }  // namespace tensorflow
 
-#endif  // GOOGLE_TENSORRT
-#endif  // GOOGLE_CUDA
+#endif  // GOOGLE_CUDA && GOOGLE_TENSORRT

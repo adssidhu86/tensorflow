@@ -1,8 +1,12 @@
-licenses(["notice"])  # Apache 2.0
+load("//tensorflow/lite:special_rules.bzl", "if_nnapi")
+load("//tensorflow:tensorflow.bzl", "get_compatible_with_portable")
 
-package(default_visibility = [
-    "//visibility:public",
-])
+package(
+    default_visibility = [
+        "//visibility:public",
+    ],
+    licenses = ["notice"],  # Apache 2.0
+)
 
 cc_library(
     name = "nnapi_lib",
@@ -10,33 +14,38 @@ cc_library(
         "NeuralNetworksShim.h",
         "NeuralNetworksTypes.h",
     ],
-    linkopts = ["-ldl"],
+    compatible_with = get_compatible_with_portable(),
+    linkopts = if_nnapi(["-ldl"]),
 )
 
 cc_library(
     name = "nnapi_implementation",
-    srcs = select({
-        "//tensorflow:ios": [
-            "nnapi_implementation_disabled.cc",
-        ],
-        "//tensorflow:windows": [
-            "nnapi_implementation_disabled.cc",
-        ],
-        "//conditions:default": [
-            "nnapi_implementation.cc",
-        ],
-    }),
+    srcs = if_nnapi(
+        not_supported = ["nnapi_implementation_disabled.cc"],
+        supported = ["nnapi_implementation.cc"],
+    ),
     hdrs = [
         "nnapi_implementation.h",
     ],
-    linkopts = ["-ldl"] + select({
-        "//tensorflow:android": [],
-        "//tensorflow:ios": [],
-        "//tensorflow:windows": [],
-        "//conditions:default": ["-lrt"],
-    }),
+    compatible_with = get_compatible_with_portable(),
+    linkopts = if_nnapi(["-ldl"]) + if_nnapi(
+        supported = ["-lrt"],
+        supported_android = [],
+    ),
     deps = [
-        "//tensorflow/lite/nnapi:nnapi_lib",
+        ":nnapi_lib",
+    ],
+)
+
+cc_library(
+    name = "nnapi_util",
+    srcs = ["nnapi_util.cc"],
+    hdrs = ["nnapi_util.h"],
+    compatible_with = get_compatible_with_portable(),
+    deps = [
+        ":nnapi_implementation",
+        "//tensorflow/lite:util",
+        "//tensorflow/lite/c:common",
     ],
 )
 
@@ -44,7 +53,35 @@ cc_test(
     name = "nnapi_implementation_test",
     srcs = ["nnapi_implementation_test.cc"],
     deps = [
-        "//tensorflow/lite/nnapi:nnapi_implementation",
+        ":nnapi_implementation",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+# Cannot inject NNAPI instance on ios and windows
+cc_library(
+    name = "nnapi_handler",
+    srcs = if_nnapi(["nnapi_handler.cc"]),
+    hdrs = if_nnapi(["nnapi_handler.h"]),
+    deps = [
+        ":nnapi_implementation",
+        ":nnapi_lib",
+        "//tensorflow/core/platform:logging",
+        "//tensorflow/lite:framework",
+    ],
+)
+
+cc_test(
+    name = "nnapi_handler_test",
+    srcs = ["nnapi_handler_test.cc"],
+    tags = [
+        "no_mac",
+        "no_windows",
+        "tflite_not_portable_ios",
+    ],
+    deps = [
+        ":nnapi_handler",
+        ":nnapi_implementation",
         "@com_google_googletest//:gtest_main",
     ],
 )

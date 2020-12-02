@@ -28,12 +28,11 @@ from tensorflow.python.framework import test_util
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops.ragged import ragged_concat_ops
 from tensorflow.python.ops.ragged import ragged_factory_ops
-from tensorflow.python.ops.ragged import ragged_test_util
 from tensorflow.python.platform import googletest
 
 
 @test_util.run_all_in_graph_and_eager_modes
-class RaggedConcatOpTest(ragged_test_util.RaggedTensorTestCase,
+class RaggedConcatOpTest(test_util.TensorFlowTestCase,
                          parameterized.TestCase):
 
   def _rt_inputs_to_tensors(self, rt_inputs, ragged_ranks=None):
@@ -221,7 +220,7 @@ class RaggedConcatOpTest(ragged_test_util.RaggedTensorTestCase,
           axis=0,
           expected=[1, 2, 3, 4, 5, 6]),
       dict(
-          descr='One input (so ragged_conat is a noop)',
+          descr='One input (so ragged_concat is a noop)',
           rt_inputs=([['a00', 'a01'], [], ['a20', 'a21']],),
           axis=0,
           expected=[[b'a00', b'a01'], [], [b'a20', b'a21']]),
@@ -240,7 +239,7 @@ class RaggedConcatOpTest(ragged_test_util.RaggedTensorTestCase,
       self.assertEqual(concatenated.ragged_rank, expected_ragged_rank)
     if expected_shape is not None:
       self.assertEqual(concatenated.shape.as_list(), expected_shape)
-    self.assertRaggedEqual(concatenated, expected)
+    self.assertAllEqual(concatenated, expected)
 
   @parameterized.parameters(
       dict(
@@ -276,8 +275,8 @@ class RaggedConcatOpTest(ragged_test_util.RaggedTensorTestCase,
                       message=None,
                       ragged_ranks=None):
     rt_inputs = self._rt_inputs_to_tensors(rt_inputs, ragged_ranks)
-    self.assertRaisesRegexp(error, message, ragged_concat_ops.concat, rt_inputs,
-                            axis)
+    self.assertRaisesRegex(error, message, ragged_concat_ops.concat, rt_inputs,
+                           axis)
 
   @parameterized.parameters([
       dict(
@@ -295,7 +294,7 @@ class RaggedConcatOpTest(ragged_test_util.RaggedTensorTestCase,
         array_ops.placeholder_with_default(rt, shape=None) for rt in rt_inputs
     ]
     concatenated = ragged_concat_ops.concat(rt_inputs, axis)
-    with self.assertRaisesRegexp(error, message):
+    with self.assertRaisesRegex(error, message):
       self.evaluate(concatenated)
 
   def testNegativeAxisWithUnknownRankError(self):
@@ -305,7 +304,7 @@ class RaggedConcatOpTest(ragged_test_util.RaggedTensorTestCase,
         array_ops.placeholder(dtypes.int64),
         array_ops.placeholder(dtypes.int64)
     ]
-    self.assertRaisesRegexp(
+    self.assertRaisesRegex(
         ValueError, r'axis may only be negative if ndims is statically known.',
         ragged_concat_ops.concat, rt_inputs, -1)
 
@@ -318,7 +317,7 @@ class RaggedConcatOpTest(ragged_test_util.RaggedTensorTestCase,
     """
     rt_inputs = ragged_factory_ops.constant([[1, 2], [3, 4]])
     concatenated = ragged_concat_ops.concat(rt_inputs, 0)
-    self.assertRaggedEqual(concatenated, [[1, 2], [3, 4]])
+    self.assertAllEqual(concatenated, [[1, 2], [3, 4]])
 
 
 if __name__ == '__main__':

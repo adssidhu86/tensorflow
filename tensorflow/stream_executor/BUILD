@@ -4,20 +4,21 @@
 # Throughout this file, all targets are built with the standard crosstool and
 # do not link against restricted binary blobs.
 
-licenses(["notice"])  # Apache 2.0
-
+load("//tensorflow:tensorflow.bzl", "filegroup")
+load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 load("//tensorflow:tensorflow.bzl", "tf_cc_test")
-load("//tensorflow/core:platform/default/build_config.bzl", "tf_proto_library")
-load("//tensorflow/core:platform/default/build_config_root.bzl", "if_static")
+load("//tensorflow/core/platform:build_config.bzl", "tf_proto_library")
+load("//tensorflow/core/platform:build_config_root.bzl", "if_static")
 load("//tensorflow/stream_executor:build_defs.bzl", "stream_executor_friends")
+
+package(
+    default_visibility = [":friends"],
+    licenses = ["notice"],  # Apache 2.0
+)
 
 package_group(
     name = "friends",
     packages = stream_executor_friends(),
-)
-
-package(
-    default_visibility = [":friends"],
 )
 
 # Filegroup used to collect source files for the dependency check.
@@ -60,7 +61,6 @@ cc_library(
         "blas.h",
         "device_description.h",
         "device_options.h",
-        "dnn.h",
         "event.cc",
         "fft.h",
         "kernel_cache_config.h",
@@ -68,7 +68,6 @@ cc_library(
         "plugin.h",
         "plugin_registry.h",
         "rng.h",
-        "shared_memory_config.h",
         "stream_executor_pimpl.h",
         "temporary_device_memory.h",
         "temporary_memory_manager.h",
@@ -84,6 +83,7 @@ cc_library(
         "stream_executor_internal.h",
     ],
     deps = [
+        ":allocator_stats",
         ":dnn_proto_cc",
         ":host_or_device_scalar",
         ":stream_executor_headers",
@@ -91,7 +91,9 @@ cc_library(
         "//tensorflow/stream_executor/lib",
         "//tensorflow/stream_executor/platform",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:optional",
         "@com_google_absl//absl/types:span",
     ],
@@ -100,7 +102,6 @@ cc_library(
 cc_library(
     name = "kernel",
     srcs = [
-        "dnn.h",
         "fft.h",
         "kernel.cc",
         "plugin.h",
@@ -121,13 +122,13 @@ cc_library(
         "multi_platform_manager.h",
         "platform.h",
         "plugin_registry.h",
-        "shared_memory_config.h",
         "stream_executor.h",
         "stream_executor_internal.h",
         "timer.h",
         "trace_listener.h",
     ],
     deps = [
+        ":allocator_stats",
         ":device_memory",
         ":dnn_proto_cc",
         ":host_or_device_scalar",
@@ -137,7 +138,9 @@ cc_library(
         "//tensorflow/stream_executor/lib",
         "//tensorflow/stream_executor/platform",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:optional",
         "@com_google_absl//absl/types:span",
     ],
@@ -150,6 +153,7 @@ cc_library(
     deps = [
         "//tensorflow/stream_executor/platform",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
     ],
 )
 
@@ -167,69 +171,15 @@ cc_library(
     ],
 )
 
-cc_library(
-    name = "shared_memory_config",
-    hdrs = ["shared_memory_config.h"],
-)
-
-cc_library(
+# Aliases for backwards compatibility.
+alias(
     name = "stream_header",
-    hdrs = [
-        "blas.h",
-        "device_memory.h",
-        "dnn.h",
-        "event.h",
-        "fft.h",
-        "gpu_launch_dim.h",
-        "kernel.h",
-        "kernel_cache_config.h",
-        "launch_dim.h",
-        "stream.h",
-        "temporary_device_memory.h",
-        "temporary_memory_manager.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":dnn_proto_cc",
-        ":host_or_device_scalar",
-        ":stream_executor_headers",
-        "//tensorflow/core:lib",
-        "//tensorflow/stream_executor/lib",
-        "//tensorflow/stream_executor/platform",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/types:optional",
-        "@com_google_absl//absl/types:span",
-    ],
+    actual = ":stream_executor_headers",
 )
 
-# It implements :stream_header
-cc_library(
+alias(
     name = "stream",
-    srcs = [
-        "stream.cc",
-    ],
-    hdrs = ["stream.h"],
-    deps = [
-        ":blas",
-        ":device_memory",
-        ":dnn",
-        ":event",
-        ":fft",
-        ":host_or_device_scalar",
-        ":kernel",
-        ":launch_dim",
-        ":platform",
-        ":rng",
-        ":stream_executor_headers",
-        ":stream_executor_internal",
-        ":stream_executor_pimpl",
-        ":temporary_memory_manager",
-        "//tensorflow/core:lib",
-        "//tensorflow/stream_executor/lib",
-        "//tensorflow/stream_executor/platform",
-        "//third_party/eigen3",
-        "@com_google_absl//absl/strings",
-    ],
+    actual = ":stream_executor",
 )
 
 cc_library(
@@ -257,6 +207,7 @@ cc_library(
         "//tensorflow/stream_executor/platform",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
     ],
 )
 
@@ -291,8 +242,10 @@ cc_library(
     deps = [
         ":device_memory",
         ":stream_header",
+        "//tensorflow/core:lib",
         "//tensorflow/stream_executor/lib",
         "//tensorflow/stream_executor/platform",
+        "@com_google_absl//absl/synchronization",
     ],
 )
 
@@ -305,9 +258,12 @@ cc_library(
         ":stream_executor_pimpl_header",
         ":stream_header",
         ":temporary_device_memory",
+        "//tensorflow/core:lib",
         "//tensorflow/stream_executor/lib",
         "//tensorflow/stream_executor/platform",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
     ],
 )
 
@@ -342,6 +298,7 @@ cc_library(
     name = "host_or_device_scalar",
     hdrs = ["host_or_device_scalar.h"],
     deps = [
+        ":data_type",
         ":device_memory",
         "//tensorflow/stream_executor/platform",
     ],
@@ -373,19 +330,18 @@ cc_library(
     ],
     hdrs = [
         "blas.h",
-        "dnn.h",
         "executor_cache.h",
         "fft.h",
         "kernel.h",
         "kernel_cache_config.h",
         "kernel_spec.h",
         "platform.h",
-        "shared_memory_config.h",
         "stream.h",
         "stream_executor_internal.h",
         "trace_listener.h",
     ],
     deps = [
+        ":allocator_stats",
         ":dnn_proto_cc",
         ":host_or_device_scalar",
         ":stream_executor_headers",
@@ -393,7 +349,10 @@ cc_library(
         "//tensorflow/stream_executor/lib",
         "//tensorflow/stream_executor/platform",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:optional",
         "@com_google_absl//absl/types:span",
     ],
@@ -406,11 +365,12 @@ cc_library(
     deps = [
         ":platform",
         ":stream_executor_headers",
+        "//tensorflow/core/platform:thread_annotations",
         "//tensorflow/stream_executor/lib",
         "//tensorflow/stream_executor/platform",
-        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
     ],
 )
@@ -434,8 +394,10 @@ cc_library(
         ":plugin",
         ":stream_executor_headers",
         "//tensorflow/stream_executor/lib",
-        "//tensorflow/stream_executor/platform",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
     ],
 )
 
@@ -456,17 +418,16 @@ tf_proto_library(
     name = "dnn_proto",
     srcs = ["dnn.proto"],
     cc_api_version = 2,
-    default_header = True,
-    provide_cc_alias = True,
+    make_default_target_header_only = True,
 )
 
-tf_proto_library(
-    name = "logging_proto",
-    srcs = ["logging.proto"],
-    cc_api_version = 2,
-    protodeps = [":dnn_proto"],
-    provide_cc_alias = True,
-    visibility = [":friends"],
+cc_library(
+    name = "data_type",
+    hdrs = ["data_type.h"],
+    deps = [
+        ":dnn_proto_cc",
+        "//tensorflow/stream_executor/platform",
+    ],
 )
 
 cc_library(
@@ -474,13 +435,16 @@ cc_library(
     srcs = ["dnn.cc"],
     hdrs = ["dnn.h"],
     deps = [
+        ":data_type",
         ":device_memory",
         ":dnn_proto_cc",
         ":stream_executor_headers",
         "//tensorflow/core:lib",
         "//tensorflow/stream_executor/lib",
         "//tensorflow/stream_executor/platform",
+        "@com_google_absl//absl/hash",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:optional",
         "@com_google_absl//absl/types:span",
     ],
@@ -489,14 +453,13 @@ cc_library(
 cc_library(
     name = "stream_executor_internal",
     srcs = [
-        "dnn.h",
         "stream_executor_internal.cc",
     ],
     hdrs = [
-        "shared_memory_config.h",
         "stream_executor_internal.h",
     ],
     deps = [
+        ":allocator_stats",
         ":device_description",
         ":device_memory",
         ":device_options",
@@ -507,7 +470,6 @@ cc_library(
         ":launch_dim",
         ":plugin_registry",
         ":stream_executor_headers",
-        "//tensorflow/core:lib",
         "//tensorflow/stream_executor/lib",
         "//tensorflow/stream_executor/platform",
         "@com_google_absl//absl/types:optional",
@@ -519,10 +481,8 @@ cc_library(
     name = "stream_executor_pimpl_header",
     hdrs = [
         "device_description.h",
-        "dnn.h",
         "kernel.h",
         "kernel_cache_config.h",
-        "shared_memory_config.h",
         "stream_executor_pimpl.h",
     ],
     visibility = ["//visibility:public"],
@@ -535,7 +495,9 @@ cc_library(
         "//tensorflow/stream_executor/lib",
         "//tensorflow/stream_executor/platform",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:optional",
         "@com_google_absl//absl/types:span",
     ],
@@ -544,35 +506,51 @@ cc_library(
 # It implements :stream_executor_pimpl_header
 cc_library(
     name = "stream_executor_pimpl",
-    srcs = ["stream_executor_pimpl.cc"],
+    srcs = [
+        "stream.cc",
+        "stream_executor_pimpl.cc",
+    ],
     hdrs = ["stream_executor_pimpl.h"],
     deps = [
         ":blas",
+        ":device_memory",
+        ":dnn",
+        ":event",
         ":executor_cache",
         ":fft",
+        ":host_or_device_scalar",
         ":kernel",
+        ":launch_dim",
         ":platform",
         ":rng",
         ":stream_executor_headers",
+        ":stream_executor_internal",
         ":stream_header",
+        ":temporary_memory_manager",
         ":timer",
+        "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
         "//tensorflow/stream_executor/lib",
         "//tensorflow/stream_executor/platform",
+        "//third_party/eigen3",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:optional",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
 # The stream_executor_headers target does not prescribe an implementation.
-#
-# TODO(b/25131218) this is OBSOLETE/DEPRECATED -- get rid of this target altogether
 cc_library(
     name = "stream_executor_headers",
-    hdrs = [
+    textual_hdrs = [
         "blas.h",
         "device_description.h",
         "device_memory.h",
+        "device_memory_allocator.h",
         "device_options.h",
         "dnn.h",
         "event.h",
@@ -589,7 +567,6 @@ cc_library(
         "plugin.h",
         "plugin_registry.h",
         "rng.h",
-        "shared_memory_config.h",
         "stream.h",
         "stream_executor.h",
         "stream_executor_internal.h",
@@ -601,13 +578,16 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":allocator_stats",
         ":dnn_proto_cc",
         ":host_or_device_scalar",
         "//tensorflow/core:lib",
         "//tensorflow/stream_executor/lib",
         "//tensorflow/stream_executor/platform",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:optional",
         "@com_google_absl//absl/types:span",
     ],
@@ -615,7 +595,36 @@ cc_library(
 
 cc_library(
     name = "stream_executor",
-    hdrs = ["stream_executor.h"],
+    textual_hdrs = [
+        "blas.h",
+        "device_description.h",
+        "device_memory.h",
+        "device_memory_allocator.h",
+        "device_options.h",
+        "dnn.h",
+        "event.h",
+        "executor_cache.h",
+        "fft.h",
+        "gpu_launch_dim.h",
+        "kernel.h",
+        "kernel_cache_config.h",
+        "kernel_spec.h",
+        "launch_dim.h",
+        "module_spec.h",
+        "multi_platform_manager.h",
+        "platform.h",
+        "plugin.h",
+        "plugin_registry.h",
+        "rng.h",
+        "stream.h",
+        "stream_executor.h",
+        "stream_executor_internal.h",
+        "stream_executor_pimpl.h",
+        "temporary_device_memory.h",
+        "temporary_memory_manager.h",
+        "timer.h",
+        "trace_listener.h",
+    ],
     deps = [":stream_executor_headers"] + if_static([":stream_executor_impl"]),
 )
 
@@ -631,10 +640,63 @@ cc_library(
         ":launch_dim",
         ":multi_platform_manager",
         ":platform",
-        ":stream",
         ":stream_executor_headers",
         ":stream_executor_pimpl",
         ":timer",
+    ],
+)
+
+cc_library(
+    name = "allocator_stats",
+    srcs = [
+        "allocator_stats.cc",
+    ],
+    hdrs = ["allocator_stats.h"],
+    deps = [
+        "//tensorflow/stream_executor/platform",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/types:optional",
+    ],
+)
+
+cc_library(
+    name = "device_memory_allocator",
+    hdrs = ["device_memory_allocator.h"],
+    deps = [
+        ":device_memory",
+        ":platform",
+        ":stream_executor",
+        "//tensorflow/core:lib",
+        "//tensorflow/stream_executor/lib",
+        "//tensorflow/stream_executor/platform",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:optional",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "tf_allocator_adapter",
+    srcs = ["tf_allocator_adapter.cc"],
+    hdrs = ["tf_allocator_adapter.h"],
+    deps = [
+        ":device_memory",
+        ":device_memory_allocator",
+        ":platform",
+        ":stream_executor_headers",
+        "//tensorflow/core:lib",
+        "//tensorflow/core/framework:allocator",
+        "//tensorflow/stream_executor/lib",
+        "//tensorflow/stream_executor/platform",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:optional",
+        "@com_google_absl//absl/types:span",
     ],
 )
 

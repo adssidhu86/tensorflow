@@ -20,13 +20,12 @@ from __future__ import print_function
 
 from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import test_util
-from tensorflow.python.ops.ragged import ragged_test_util
 from tensorflow.python.ops.ragged import segment_id_ops
 from tensorflow.python.platform import googletest
 
 
 @test_util.run_all_in_graph_and_eager_modes
-class RaggedSplitsToSegmentIdsOpTest(ragged_test_util.RaggedTensorTestCase):
+class RaggedSplitsToSegmentIdsOpTest(test_util.TensorFlowTestCase):
 
   def testDocStringExample(self):
     segment_ids = [0, 0, 0, 2, 2, 3, 4, 4, 4]
@@ -40,14 +39,14 @@ class RaggedSplitsToSegmentIdsOpTest(ragged_test_util.RaggedTensorTestCase):
     self.assertAllEqual(segment_ids, [0])
 
   def testErrors(self):
-    self.assertRaisesRegexp(TypeError,
-                            r'segment_ids must be an integer tensor.*',
-                            segment_id_ops.segment_ids_to_row_splits,
-                            constant_op.constant([0.5]))
-    self.assertRaisesRegexp(ValueError, r'Shape \(\) must have rank 1',
-                            segment_id_ops.segment_ids_to_row_splits, 0)
-    self.assertRaisesRegexp(ValueError, r'Shape \(1, 1\) must have rank 1',
-                            segment_id_ops.segment_ids_to_row_splits, [[0]])
+    self.assertRaisesRegex(TypeError,
+                           r'segment_ids must be an integer tensor.*',
+                           segment_id_ops.segment_ids_to_row_splits,
+                           constant_op.constant([0.5]))
+    self.assertRaisesRegex(ValueError, r'Shape \(\) must have rank 1',
+                           segment_id_ops.segment_ids_to_row_splits, 0)
+    self.assertRaisesRegex(ValueError, r'Shape \(1, 1\) must have rank 1',
+                           segment_id_ops.segment_ids_to_row_splits, [[0]])
 
   def testNumSegments(self):
     segment_ids = [0, 0, 0, 2, 2, 3, 4, 4, 4]

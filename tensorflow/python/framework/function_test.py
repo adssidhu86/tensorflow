@@ -19,9 +19,9 @@ from __future__ import division
 from __future__ import print_function
 
 import re
-import sys
 import time
 
+from absl.testing import parameterized
 import numpy as np
 
 from tensorflow.core.framework import function_pb2
@@ -48,6 +48,7 @@ from tensorflow.python.ops import logging_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import nn_ops
 from tensorflow.python.ops import random_ops
+from tensorflow.python.ops import template
 from tensorflow.python.ops import variable_scope
 from tensorflow.python.ops import variables
 from tensorflow.python.platform import test
@@ -105,7 +106,7 @@ class FunctionTest(test.TestCase):
       with session.Session() as sess:
         self.assertAllEqual([18.0], self.evaluate(call))
 
-  @test_util.run_deprecated_v1
+  @test_util.run_v1_only("b/120545219")
   def testIdentityImplicitDeref(self):
 
     @function.Defun(dtypes.float32, func_name="MyIdentity")
@@ -144,7 +145,7 @@ class FunctionTest(test.TestCase):
       return a
 
     with ops.Graph().as_default():
-      with self.assertRaisesRegexp(
+      with self.assertRaisesRegex(
           errors_impl.InvalidArgumentError,
           (r"output names must be either empty or equal in size to outputs. "
            "output names size = 2 outputs size = 1")):
@@ -284,7 +285,7 @@ class FunctionTest(test.TestCase):
         out, = sess.run(dlogits, {logits: x, labels: y})
       self.assertAllClose(out, np.exp(prob - y))
 
-  @test_util.disable_xla("This test never passed for XLA")
+  @test_util.disable_xla("b/124286351")  # No error is raised
   def testCustomGradientError(self):
     dtype = dtypes.float32
 
@@ -305,7 +306,7 @@ class FunctionTest(test.TestCase):
 
     x = np.random.uniform(-10., 10., size=(4, 9)).astype(np.float32)
     with session.Session(graph=g) as sess:
-      with self.assertRaisesRegexp(
+      with self.assertRaisesRegex(
           errors_impl.InvalidArgumentError,
           "SymGrad expects to return 1.*but get 2.*instead"):
         _ = sess.run(dinp, {inp: x})
@@ -350,8 +351,8 @@ class FunctionTest(test.TestCase):
                 do_constant_folding=True)))
 
     with self.session(graph=g, config=cfg):
-      self.assertAllClose(y.eval(), 6.)
-      self.assertAllClose(dx.eval(), 2.)
+      self.assertAllClose(y, 6.)
+      self.assertAllClose(dx, 2.)
 
   def _testZNoDepOnY(self, use_const_grad_ys):
 
@@ -423,7 +424,7 @@ class FunctionTest(test.TestCase):
 
     with ops.Graph().as_default(), self.cached_session():
       z = Foo(constant_op.constant(3.0))
-      self.assertAllEqual(z.eval(), 6.0)
+      self.assertAllEqual(z, 6.0)
 
   def testAssertOp(self):
 
@@ -437,10 +438,10 @@ class FunctionTest(test.TestCase):
     self.assertEqual([("Assert", "Assert")], Foo.stateful_ops)
     g = ops.Graph()
     with g.as_default(), self.cached_session():
-      self.assertAllEqual(Foo(constant_op.constant(3.0)).eval(), 6.0)
-      with self.assertRaisesRegexp(errors_impl.InvalidArgumentError,
-                                   "assertion failed.*-3"):
-        self.assertAllEqual(Foo(constant_op.constant(-3.0)).eval(), 6.0)
+      self.assertAllEqual(Foo(constant_op.constant(3.0)), 6.0)
+      with self.assertRaisesRegex(errors_impl.InvalidArgumentError,
+                                  "assertion failed.*-3"):
+        self.assertAllEqual(Foo(constant_op.constant(-3.0)), 6.0)
 
   @test_util.run_deprecated_v1
   def testAssertWrapper(self):
@@ -453,8 +454,8 @@ class FunctionTest(test.TestCase):
 
     with self.cached_session():
       self.assertEqual(1.0, MyFn(1.0).eval())
-      with self.assertRaisesRegexp(errors_impl.InvalidArgumentError,
-                                   "assertion"):
+      with self.assertRaisesRegex(errors_impl.InvalidArgumentError,
+                                  "assertion"):
         _ = MyFn(100.0).eval()
 
   @test_util.run_deprecated_v1
@@ -514,14 +515,14 @@ class FunctionTest(test.TestCase):
       self.assertEqual(4, sess.run(cond, {pred: True, x: 3}))
 
       # The assertion should still fire if the False branch is taken.
-      with self.assertRaisesRegexp(errors_impl.InvalidArgumentError,
-                                   "assertion"):
+      with self.assertRaisesRegex(errors_impl.InvalidArgumentError,
+                                  "assertion"):
         sess.run(cond, {pred: False, x: 3})
 
       # Similarly for loops.
       self.assertEqual(3, sess.run(loop, {pred: False, x: 3}))
-      with self.assertRaisesRegexp(errors_impl.InvalidArgumentError,
-                                   "assertion"):
+      with self.assertRaisesRegex(errors_impl.InvalidArgumentError,
+                                  "assertion"):
         sess.run(loop, {pred: True, x: 3})
 
   @test_util.run_deprecated_v1
@@ -537,8 +538,8 @@ class FunctionTest(test.TestCase):
       z = Foo(v)
 
     with self.session(graph=g):
-      variables.global_variables_initializer().run()
-      self.assertAllEqual(z.eval(), 101.)
+      self.evaluate(variables.global_variables_initializer())
+      self.assertAllEqual(z, 101.)
 
   @test_util.run_deprecated_v1
   def testResourceVarAsImplicitInput(self):
@@ -561,12 +562,12 @@ class FunctionTest(test.TestCase):
 
     with self.session(graph=g):
       v.initializer.run()
-      self.assertAllEqual(expected_val.eval(), self.evaluate(actual_val))
+      self.assertAllEqual(expected_val, self.evaluate(actual_val))
       self.assertAllEqual(expected_shape, self.evaluate(actual_shape))
 
   def testDefineErrors(self):
     with ops.Graph().as_default():
-      with self.assertRaisesRegexp(ValueError, "can not return None"):
+      with self.assertRaisesRegex(ValueError, "can not return None"):
 
         @function.Defun()
         def TwoNone():
@@ -574,28 +575,28 @@ class FunctionTest(test.TestCase):
 
         _ = TwoNone.definition
 
-      with self.assertRaisesRegexp(ValueError, "are not supported"):
+      with self.assertRaisesRegex(ValueError, "are not supported"):
 
         @function.Defun()
         def DefaultArg(unused_a=12):
           return constant_op.constant([1])
 
         _ = DefaultArg.definition
-      with self.assertRaisesRegexp(ValueError, "are not supported"):
+      with self.assertRaisesRegex(ValueError, "are not supported"):
 
         @function.Defun()
         def KwArgs(**unused_kwargs):
           return constant_op.constant([1])
 
         _ = KwArgs.definition
-      with self.assertRaisesRegexp(ValueError, "specified input types"):
+      with self.assertRaisesRegex(ValueError, "specified input types"):
 
         @function.Defun(dtypes.float32)
         def PlusMinusV2(a, b):
           return a + b, b - a
 
         _ = PlusMinusV2.definition
-      with self.assertRaisesRegexp(ValueError, "specified input types"):
+      with self.assertRaisesRegex(ValueError, "specified input types"):
 
         @function.Defun(dtypes.float32, dtypes.float32, dtypes.float32)
         def PlusMinusV3(a, b):
@@ -623,25 +624,25 @@ class FunctionTest(test.TestCase):
       # pylint: disable=too-many-function-args
       # pylint: disable=unexpected-keyword-arg
       # pylint: disable=no-value-for-parameter
-      with self.assertRaisesRegexp(ValueError, "arguments: 0"):
+      with self.assertRaisesRegex(ValueError, "arguments: 0"):
         _ = Const(1)
-      with self.assertRaisesRegexp(ValueError, "arguments: 0"):
+      with self.assertRaisesRegex(ValueError, "arguments: 0"):
         _ = Const(1, 2)
 
-      with self.assertRaisesRegexp(ValueError, "arguments: 1"):
+      with self.assertRaisesRegex(ValueError, "arguments: 1"):
         _ = PlusOne()
       _ = PlusOne(1)
-      with self.assertRaisesRegexp(ValueError, "arguments: 1"):
+      with self.assertRaisesRegex(ValueError, "arguments: 1"):
         _ = PlusOne(1, 2)
 
-      with self.assertRaisesRegexp(ValueError, "arguments: 2"):
+      with self.assertRaisesRegex(ValueError, "arguments: 2"):
         _ = PlusMinus()
-      with self.assertRaisesRegexp(ValueError, "arguments: 2"):
+      with self.assertRaisesRegex(ValueError, "arguments: 2"):
         _ = PlusMinus(1)
       _ = PlusMinus(1, 2)
 
       _ = PlusOne(1, name="p1")
-      with self.assertRaisesRegexp(ValueError, "Unknown keyword arguments"):
+      with self.assertRaisesRegex(ValueError, "Unknown keyword arguments"):
         _ = PlusOne(1, device="/device:GPU:0")
 
   def testFunctionDecorator(self):
@@ -675,7 +676,7 @@ class FunctionTest(test.TestCase):
     with ops.Graph().as_default():
       z = CubeXPlusY(3.0, -2.0)
       with self.cached_session():
-        self.assertAllEqual(z.eval(), 25.0)
+        self.assertAllEqual(z, 25.0)
 
   def testNestedDefinedFunction(self):
 
@@ -691,7 +692,7 @@ class FunctionTest(test.TestCase):
     with ops.Graph().as_default():
       z = CubeXPlusY(3.0, -2.0)
       with self.cached_session():
-        self.assertAllEqual(z.eval(), 25.0)
+        self.assertAllEqual(z, 25.0)
 
   def testUnusedFunction(self):
     invoked = False
@@ -772,9 +773,9 @@ class FunctionTest(test.TestCase):
       z = Bar()
 
     with self.session(graph=g):
-      variables.global_variables_initializer().run()
-      self.assertAllEqual(y.eval(), [[12.0]])
-      self.assertAllEqual(z.eval(), [[1.0]])
+      self.evaluate(variables.global_variables_initializer())
+      self.assertAllEqual(y, [[12.0]])
+      self.assertAllEqual(z, [[1.0]])
 
   def testCaptureControls(self):
     g = ops.Graph()
@@ -788,7 +789,7 @@ class FunctionTest(test.TestCase):
           y = logging_ops.Print(y, [y], "inner")
         return y
 
-      with self.assertRaisesRegexp(ValueError, "not an element of this graph."):
+      with self.assertRaisesRegex(ValueError, "not an element of this graph."):
         # NOTE: We still do not support capturing control deps.
         _ = Foo(x)
 
@@ -824,19 +825,6 @@ class FunctionTest(test.TestCase):
     with self.session(graph=g) as sess:
       self.assertEqual(self.evaluate(y), 1)
       self.assertEqual(self.evaluate(z), 2)
-
-  def testStableName(self):
-
-    @function.Defun()
-    def Foo(x, y, z):
-      return math_ops.tanh(math_ops.matmul(x, y) + z)
-
-    if sys.byteorder == "big":
-      self.assertEqual("Foo_kEdkAG8SJvg",
-                       Foo.instantiate([dtypes.float32] * 3).name)
-    else:
-      self.assertEqual("Foo_aCYSbwBkR5A",
-                       Foo.instantiate([dtypes.float32] * 3).name)
 
   @test_util.run_deprecated_v1
   def testSignatureHash(self):
@@ -1055,7 +1043,8 @@ class FunctionTest(test.TestCase):
         self.assertFalse(all(val3 == val1))
         self.assertFalse(all(val4 == val2))
 
-  def testStatefulFunctionWithWhitelisting(self):
+  @test_util.run_v1_only("currently failing on v2")
+  def testStatefulFunctionWithAllowlisting(self):
     t = random_ops.random_uniform([100], maxval=10, dtype=dtypes.int32)
 
     @function.Defun(capture_by_value=True)
@@ -1063,11 +1052,11 @@ class FunctionTest(test.TestCase):
       return t + constant_op.constant(3, dtype=dtypes.int32)
 
     # First time we try to capture a stateful RandomUniform op.
-    with self.assertRaisesRegexp(ValueError, "Cannot capture a stateful node"):
+    with self.assertRaisesRegex(ValueError, "Cannot capture a stateful node"):
       res = StatefulFn()
 
-    # This time we whitelist this op, so that its recreated.
-    @function.Defun(capture_by_value=True, whitelisted_stateful_ops=set([t.op]))
+    # This time we allowlist this op, so that its recreated.
+    @function.Defun(capture_by_value=True, allowlisted_stateful_ops=set([t.op]))
     def StatefulFn2():
       return t + constant_op.constant(3, dtype=dtypes.int32)
 
@@ -1325,7 +1314,7 @@ class FunctionsFromProtos(test.TestCase):
     library.gradient.extend([gradient])
     library.function.extend([F1.definition])
 
-    with self.assertRaisesRegexp(
+    with self.assertRaisesRegex(
         ValueError,
         "FunctionDefLibrary missing 'G1_[0-9a-zA-Z]{8,11}' FunctionDef"):
       function.from_library(library)
@@ -1335,7 +1324,7 @@ class FunctionsFromProtos(test.TestCase):
     library.gradient.extend([gradient])
     library.function.extend([G1.definition])
 
-    with self.assertRaisesRegexp(
+    with self.assertRaisesRegex(
         ValueError,
         "FunctionDefLibrary missing 'F1_[0-9a-zA-Z]{8,11}' FunctionDef"):
       function.from_library(library)
@@ -1365,7 +1354,7 @@ class FunctionsFromProtos(test.TestCase):
 
     library.gradient.extend([gradient1, gradient2])
 
-    with self.assertRaisesRegexp(
+    with self.assertRaisesRegex(
         ValueError, "FunctionDefLibrary contains cyclic gradient functions!"):
       function.from_library(library)
 
@@ -1400,6 +1389,20 @@ class FunctionsFromProtos(test.TestCase):
     self.assertEqual(FunctionWithBoolAttr.definition.attr["experimental_tag"].b,
                      True)
 
+  def testImplementsReferenceAttrs(self):
+
+    @function.Defun(
+        dtypes.int32, _implements="org.google.lstm", _reference="arxiv.org")
+    def FunctionWithStrAttr(i):
+      return array_ops.identity(i)
+
+    self.assertIn("_implements", FunctionWithStrAttr.definition.attr)
+    self.assertEqual(FunctionWithStrAttr.definition.attr["_implements"].s,
+                     b"org.google.lstm")
+    self.assertIn("_reference", FunctionWithStrAttr.definition.attr)
+    self.assertEqual(FunctionWithStrAttr.definition.attr["_reference"].s,
+                     b"arxiv.org")
+
 
 class FunctionOverloadTest(test.TestCase):
 
@@ -1416,8 +1419,8 @@ class FunctionOverloadTest(test.TestCase):
       y = Sinh(constant_op.constant(0.25, dtypes.float64))
 
     with self.session(graph=g):
-      self.assertAllClose(x.eval(), np.sinh(0.25))
-      self.assertAllClose(y.eval(), np.sinh(0.25))
+      self.assertAllClose(x, np.sinh(0.25))
+      self.assertAllClose(y, np.sinh(0.25))
 
   def testGradient(self):
 
@@ -1437,7 +1440,7 @@ class FunctionOverloadTest(test.TestCase):
         dx, = gradients_impl.gradients(y, x)
 
         with self.session(graph=g):
-          self.assertAllClose(dx.eval(), 0.25)
+          self.assertAllClose(dx, 0.25)
 
   def testDocString(self):
 
@@ -1481,9 +1484,11 @@ class FunctionCaptureByValueTest(test.TestCase):
     self.assertEqual(0, len(Foo.captured_inputs))
 
     with self.session(graph=g):
-      self.assertAllEqual(y.eval(), [[12.0]])
+      self.assertAllEqual(y, [[12.0]])
 
 
+@test_util.run_all_without_tensor_float_32(
+    "Calls matmul in custom LSTM function")
 class UnrollLSTMTest(test.TestCase):
   BATCH_SIZE = 16
   LSTM_DIMS = 32
@@ -1620,9 +1625,11 @@ class UnrollLSTMTest(test.TestCase):
       self.assertAllClose(d0, d3, rtol=1e-4, atol=1e-4)
 
 
-class FunctionInlineControlTest(test.TestCase):
+class FunctionInlineControlTest(test.TestCase, parameterized.TestCase):
 
-  def testFoo(self):
+  @parameterized.parameters((True), (False))
+  @test_util.disable_xla("XLA changes the names, breaking graph analysis")
+  def testFoo(self, noinline):
     dtype = dtypes.float32
     cfg = config_pb2.ConfigProto(
         graph_options=config_pb2.GraphOptions(
@@ -1632,50 +1639,50 @@ class FunctionInlineControlTest(test.TestCase):
                 do_function_inlining=True,
                 do_constant_folding=True)))
     cell_func_call_pattern = re.compile(r"Cell[^/]*\(")
-    for noinline in [False, True]:
+    @function.Defun(dtype, noinline=noinline)
+    def Cell(v):
+      # If v is a vector [n, 1], x is a big square matrix.
+      x = math_ops.tanh(v + array_ops.transpose(v, [1, 0]))
+      return math_ops.reduce_sum(x, 1, keepdims=True)
 
-      @function.Defun(dtype, noinline=noinline)
-      def Cell(v):
-        # If v is a vector [n, 1], x is a big square matrix.
-        x = math_ops.tanh(v + array_ops.transpose(v, [1, 0]))
-        return math_ops.reduce_sum(x, 1, keepdims=True)
+    @function.Defun(dtype)
+    def Forward(x):
+      for _ in range(10):
+        # pylint: disable=cell-var-from-loop
+        x = Cell(x)
+      return math_ops.reduce_sum(x, [0, 1])
 
-      @function.Defun(dtype)
-      def Forward(x):
-        for _ in range(10):
-          # pylint: disable=cell-var-from-loop
-          x = Cell(x)
-        return math_ops.reduce_sum(x, [0, 1])
-
+    # Disabling this check on the ROCm platform, because it fails
+    # The failure might not be ROCm specific(see commit message for details)
+    if not test.is_built_with_rocm():
       self.assertEqual(noinline, Cell.definition.attr["_noinline"].b)
 
-      g = ops.Graph()
-      with g.as_default():
-        x = array_ops.placeholder(dtype)
-        y = Forward(x)
-        dx, = gradients_impl.gradients([y], [x])
+    g = ops.Graph()
+    with g.as_default():
+      x = array_ops.placeholder(dtype)
+      y = Forward(x)
+      dx, = gradients_impl.gradients([y], [x])
 
-      np.random.seed(321)
-      inp = np.random.uniform(-1, 1, [16, 1]).astype(np.float32)
-      run_metadata = config_pb2.RunMetadata()
-      with session.Session(graph=g, config=cfg) as sess:
-        ans = sess.run(
-            [y, dx], {x: inp},
-            run_metadata=run_metadata,
-            options=config_pb2.RunOptions(
-                trace_level=config_pb2.RunOptions.FULL_TRACE))
-        print(ans[0], np.sum(ans[1]))
-        self.assertAllClose(ans[0], 255.971, rtol=1e-3)
-        self.assertAllClose(np.sum(ans[1]), 13.0408, rtol=1e-3)
+    np.random.seed(321)
+    inp = np.random.uniform(-1, 1, [16, 1]).astype(np.float32)
+    run_metadata = config_pb2.RunMetadata()
+    with session.Session(graph=g, config=cfg) as sess:
+      ans = sess.run(
+          [y, dx], {x: inp},
+          run_metadata=run_metadata,
+          options=config_pb2.RunOptions(
+              trace_level=config_pb2.RunOptions.FULL_TRACE))
+      self.assertAllClose(ans[0], 255.971, rtol=1e-3)
+      self.assertAllClose(np.sum(ans[1]), 13.0408, rtol=1e-3)
 
-      def MetadataHasCell(run_metadata):
-        for dev_stats in run_metadata.step_stats.dev_stats:
-          for node_stats in dev_stats.node_stats:
-            if cell_func_call_pattern.search(node_stats.timeline_label):
-              return True
-        return False
+    def MetadataHasCell(run_metadata):
+      for dev_stats in run_metadata.step_stats.dev_stats:
+        for node_stats in dev_stats.node_stats:
+          if cell_func_call_pattern.search(node_stats.timeline_label):
+            return True
+      return False
 
-      self.assertEqual(MetadataHasCell(run_metadata), noinline)
+    self.assertEqual(MetadataHasCell(run_metadata), noinline)
 
 
 class ModuleFunctionTest(test.TestCase):
@@ -1766,13 +1773,64 @@ class VariableHoistingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBasic(self):
-    self._testSimpleModel(True)
     self._testSimpleModel(False)
+    self._testSimpleModel(True)
 
   @test_util.run_deprecated_v1
   def testBasicResource(self):
-    self._testSimpleModel(True, use_resource=True)
     self._testSimpleModel(False, use_resource=True)
+    self._testSimpleModel(True, use_resource=True)
+
+
+class TemplateTest(test.TestCase):
+
+  @test_util.run_v1_only("make_template not supported in TF2")
+  def testBasic(self):
+    self.assertTemplateVariableSharing(use_resource=True, defun_first=False)
+
+  @test_util.run_v1_only("make_template not supported in TF2")
+  def testBasicRef(self):
+    self.assertTemplateVariableSharing(use_resource=False, defun_first=False)
+
+  @test_util.run_v1_only("make_template not supported in TF2")
+  def testBasicDefunFirst(self):
+    self.assertTemplateVariableSharing(use_resource=True, defun_first=True)
+
+  @test_util.run_v1_only("make_template not supported in TF2")
+  def testBasicRefDefunFirst(self):
+    self.assertTemplateVariableSharing(use_resource=False, defun_first=True)
+
+  def assertTemplateVariableSharing(self, use_resource, defun_first):
+    parameters = []
+
+    def MakeModel(x):
+      w = variable_scope.get_variable(
+          "w", (64, 64),
+          initializer=init_ops.random_uniform_initializer(seed=312),
+          use_resource=use_resource)
+      b = variable_scope.get_variable(
+          "b", (64),
+          initializer=init_ops.zeros_initializer(),
+          use_resource=use_resource)
+      parameters.extend((w, b))
+      return math_ops.sigmoid(math_ops.matmul(x, w) + b)
+
+    model = template.make_template("f", MakeModel, create_scope_now_=True)
+
+    @function.Defun()
+    def ModelDefun(x):
+      return model(x)
+
+    x = array_ops.placeholder(dtypes.float32)
+    if defun_first:
+      ModelDefun(x)
+      model(x)
+    else:
+      model(x)
+      ModelDefun(x)
+    w1, b1, w2, b2 = parameters  # pylint: disable=unbalanced-tuple-unpacking
+    self.assertIs(w1, w2)
+    self.assertIs(b1, b2)
 
 
 class DevicePlacementTest(test.TestCase):

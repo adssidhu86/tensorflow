@@ -27,6 +27,7 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "tensorflow/compiler/xla/primitive_util.h"
 #include "tensorflow/compiler/xla/shape_util.h"
 #include "tensorflow/compiler/xla/status_macros.h"
 #include "tensorflow/compiler/xla/types.h"
@@ -156,14 +157,6 @@ Status VerifyReducerShape(const ProgramShape& reducer_shape,
   return Status::OK();
 }
 
-bool IsTrivialWindowDimension(const WindowDimension& window_dimension) {
-  return window_dimension.size() == 1 && window_dimension.stride() == 1 &&
-         window_dimension.padding_low() == 0 &&
-         window_dimension.padding_high() == 0 &&
-         window_dimension.window_dilation() == 1 &&
-         window_dimension.base_dilation() == 1;
-}
-
 StatusOr<Shape> InferWindowOutputShape(const Shape& base_shape,
                                        const Window& window,
                                        PrimitiveType element_type,
@@ -205,12 +198,6 @@ StatusOr<Shape> InferWindowOutputShape(const Shape& base_shape,
           window.DebugString());
     }
 
-    if (base_shape.is_dynamic_dimension(i) && !IsTrivialWindowDimension(dim)) {
-      return Unimplemented(
-          "Dynamic shape is not supported for non trivial window: %s",
-          window_util::ToString(window));
-    }
-
     const int64 dilated_base = window_util::DilatedBound(
         ShapeUtil::GetDimension(base_shape, i), dim.base_dilation());
     const int64 padded_dilated_base =
@@ -225,6 +212,37 @@ StatusOr<Shape> InferWindowOutputShape(const Shape& base_shape,
 
   return ShapeUtil::MakeValidatedShape(element_type, output_dimensions,
                                        output_is_dynamic);
+}
+
+StatusOr<PrimitiveType> MaybeUpcast(
+    PrimitiveType from_type,
+    absl::optional<PrimitiveType> preferred_element_type) {
+  if (!preferred_element_type.has_value() ||
+      *preferred_element_type == from_type) {
+    return from_type;
+  }
+  if (primitive_util::IsIntegralType(from_type) !=
+      primitive_util::IsIntegralType(*preferred_element_type)) {
+    return InvalidArgument(
+        "`preferred_element_type` and the original type must both be integral "
+        "or both be floating point.");
+  }
+  if (!primitive_util::IsSignedIntegralType(from_type) !=
+      !primitive_util::IsSignedIntegralType(*preferred_element_type)) {
+    return InvalidArgument(
+        "`preferred_element_type` must have the same signedness as the "
+        "original type.");
+  }
+  if (primitive_util::BitWidth(*preferred_element_type) <
+      primitive_util::BitWidth(from_type)) {
+    if (primitive_util::IsFloatingPointType(from_type)) {
+      return from_type;
+    }
+    return InvalidArgument(
+        "`preferred_element_type` must not be narrower than the original "
+        "type.");
+  }
+  return *preferred_element_type;
 }
 
 }  // namespace
@@ -262,6 +280,10 @@ StatusOr<Shape> InferWindowOutputShape(const Shape& base_shape,
     case HloOpcode::kExpm1:
     case HloOpcode::kLog:
     case HloOpcode::kLog1p:
+    case HloOpcode::kLogistic:
+    case HloOpcode::kRsqrt:
+    case HloOpcode::kSqrt:
+    case HloOpcode::kCbrt:
     case HloOpcode::kTanh:
       if (!ShapeUtil::ElementIsFloating(shape) &&
           !ShapeUtil::ElementIsComplex(shape)) {
@@ -311,6 +333,14 @@ StatusOr<Shape> InferWindowOutputShape(const Shape& base_shape,
             "Expected element type in shape to be integral, floating or "
             "complex for %s operation; got %s.",
             HloOpcodeString(opcode), PrimitiveType_Name(shape.element_type()));
+      }
+      return shape;
+    case HloOpcode::kPopulationCount:
+      if (!ShapeUtil::ElementIsIntegral(shape)) {
+        return InvalidArgument(
+            "Expected an integral element type in argument to PopulationCount "
+            "operation; got %s.",
+            PrimitiveType_Name(shape.element_type()));
       }
       return shape;
     case HloOpcode::kSign:
@@ -405,7 +435,18 @@ StatusOr<Shape> InferWindowOutputShape(const Shape& base_shape,
   for (size_t i = 1; i < arg_shapes.size(); ++i) {
     new_dimensions[dimension] += arg_shapes[i]->dimensions(dimension);
   }
-  return ShapeUtil::MakeShape(element_type, new_dimensions);
+
+  Shape result = ShapeUtil::MakeShape(element_type, new_dimensions);
+
+  // Set dynamic dimensions if any input has dynamic dimension.
+  for (const Shape* shape : arg_shapes) {
+    for (int64 i = 0; i < shape->dimensions_size(); ++i) {
+      if (shape->is_dynamic_dimension(i)) {
+        result.set_dynamic_dimension(i, true);
+      }
+    }
+  }
+  return result;
 }
 
 /* static */ StatusOr<Shape> ShapeInference::InferConvertShape(
@@ -534,6 +575,10 @@ StatusOr<Shape> InferWindowOutputShape(const Shape& base_shape,
                     p.edge_padding_high() +
                     std::max<int64>(operand_shape.dimensions(i) - 1, 0LL) *
                         p.interior_padding();
+    if (dimensions[i] < 0) {
+      return InvalidArgument("Padding result in negative size for dimension %d",
+                             i);
+    }
     is_dynamic[i] = operand_shape.is_dynamic_dimension(i);
   }
 
@@ -608,7 +653,8 @@ Status ValidateDotDimensionNumbers(
 
 /* static */ StatusOr<Shape> ShapeInference::InferDotOpShape(
     const Shape& lhs, const Shape& rhs,
-    const DotDimensionNumbers& dimension_numbers) {
+    const DotDimensionNumbers& dimension_numbers,
+    absl::optional<PrimitiveType> preferred_element_type) {
   TF_RETURN_IF_ERROR(ExpectArray(lhs, "lhs of dot"));
   TF_RETURN_IF_ERROR(ExpectArray(rhs, "rhs of dot"));
 
@@ -621,15 +667,6 @@ Status ValidateDotDimensionNumbers(
     }
     return InvalidArgument("%s", message);
   };
-
-  // Check if both element types are the same.
-  if (!ShapeUtil::SameElementTypeIgnoringFpPrecision(lhs, rhs)) {
-    return fail("Element types do not match.");
-  }
-
-  if ((lhs.rank() < 1) || (rhs.rank() < 1)) {
-    return fail("Dot only supports rank 1 or above.");
-  }
 
   // Validate basic properties of dot dimension numbers.
   TF_RETURN_IF_ERROR(ValidateDotDimensionNumbers(lhs, rhs, dimension_numbers));
@@ -649,9 +686,7 @@ Status ValidateDotDimensionNumbers(
     const int64 rhs_contracting_dimension =
         dimension_numbers.rhs_contracting_dimensions(i);
     if (lhs.dimensions(lhs_contracting_dimension) !=
-            rhs.dimensions(rhs_contracting_dimension) ||
-        lhs.is_dynamic_dimension(lhs_contracting_dimension) !=
-            rhs.is_dynamic_dimension(rhs_contracting_dimension)) {
+        rhs.dimensions(rhs_contracting_dimension)) {
       return fail("Contracting dimension sizes do not match.");
     }
   }
@@ -665,10 +700,7 @@ Status ValidateDotDimensionNumbers(
   // Check that batch dimension numbers and sizes match.
   for (int64 i = 0; i < dimension_numbers.lhs_batch_dimensions_size(); ++i) {
     if (lhs.dimensions(dimension_numbers.lhs_batch_dimensions(i)) !=
-            rhs.dimensions(dimension_numbers.rhs_batch_dimensions(i)) ||
-        lhs.is_dynamic_dimension(dimension_numbers.lhs_batch_dimensions(i)) !=
-            rhs.is_dynamic_dimension(
-                dimension_numbers.rhs_batch_dimensions(i))) {
+        rhs.dimensions(dimension_numbers.rhs_batch_dimensions(i))) {
       return fail("Batch dimension sizes must match for lhs/rhs.");
     }
   }
@@ -700,8 +732,11 @@ Status ValidateDotDimensionNumbers(
       is_dynamic.push_back(rhs.is_dynamic_dimension(i));
     }
   }
-  Shape result = ShapeUtil::MakeShape(
-      ShapeUtil::HigherPrecisionElementType(lhs, rhs), dimensions, is_dynamic);
+  TF_ASSIGN_OR_RETURN(
+      PrimitiveType type,
+      MaybeUpcast(ShapeUtil::HigherPrecisionElementType(lhs, rhs),
+                  preferred_element_type));
+  Shape result = ShapeUtil::MakeShape(type, dimensions, is_dynamic);
 
   TF_DCHECK_OK(ShapeUtil::ValidateShapeWithOptionalLayout(result));
   VLOG(2) << "inferred dot shape: " << ShapeUtil::HumanString(result);
@@ -723,13 +758,10 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   for (int64 i = 0; i < lhs.rank(); ++i) {
     if (lhs.dimensions(i) == rhs.dimensions(i)) {
       output_dimensions[i] = lhs.dimensions(i);
-      output_dimensions_is_dynamic[i] = lhs.is_dynamic_dimension(i);
     } else if (lhs.dimensions(i) == 1) {
       output_dimensions[i] = rhs.dimensions(i);
-      output_dimensions_is_dynamic[i] = rhs.is_dynamic_dimension(i);
     } else if (rhs.dimensions(i) == 1) {
       output_dimensions[i] = lhs.dimensions(i);
-      output_dimensions_is_dynamic[i] = lhs.is_dynamic_dimension(i);
     } else {
       return InvalidArgument(
           "Binary op %s with incompatible shapes: %s and %s.",
@@ -737,6 +769,14 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
           ShapeUtil::HumanString(rhs));
     }
   }
+
+  // Merge dynamic dimensions from two shapes.
+  for (int64 i = 0; i < rhs.rank(); ++i) {
+    if (rhs.is_dynamic_dimension(i) || lhs.is_dynamic_dimension(i)) {
+      output_dimensions_is_dynamic[i] = true;
+    }
+  }
+
   return ShapeUtil::MakeShape(ShapeUtil::HigherPrecisionElementType(lhs, rhs),
                               output_dimensions, output_dimensions_is_dynamic);
 }
@@ -832,10 +872,16 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
           ShapeUtil::HumanString(larger_shape));
     }
     if (small_is_dynamic != large_is_dynamic) {
-      return InvalidArgument(
-          "Broadcast dimension %d dynamism mismatch: %s and %s.", i,
-          ShapeUtil::HumanString(smaller_shape),
-          ShapeUtil::HumanString(larger_shape));
+      if (small_dimension_size == large_dimension_size ||
+          (small_dimension_size == 1 && !small_is_dynamic) ||
+          (large_dimension_size == 1 && !large_is_dynamic)) {
+        // Do nothing. It's OK when the size-1 dimension is not static.
+      } else {
+        return InvalidArgument(
+            "Broadcast dimension %d dynamism mismatch: %s and %s.", i,
+            ShapeUtil::HumanString(smaller_shape),
+            ShapeUtil::HumanString(larger_shape));
+      }
     }
     // Make sure the broadcast dimensions are listed in a strictly increasing
     // order.
@@ -879,11 +925,18 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   if (ShapeUtil::CompatibleIgnoringFpPrecision(lhs, rhs)) {
     // If the shapes are the same other than layout, the output shape is the
     // same (elementwise op).
-    return ShapeUtil::ChangeElementType(
+    Shape result = ShapeUtil::ChangeElementType(
         lhs, ShapeUtil::HigherPrecisionElementType(lhs, rhs));
-  }
 
-  if (lhs.rank() == rhs.rank()) {
+    for (int64 i = 0; i < rhs.rank(); ++i) {
+      if (rhs.is_dynamic_dimension(i)) {
+        result.set_dynamic_dimension(i, true);
+      }
+    }
+
+    return result;
+
+  } else if (lhs.rank() == rhs.rank()) {
     return InferDegenerateDimensionBroadcastShape(operation, lhs, rhs);
   } else {
     // Ranks do not match, so perform InDim broadcasting using
@@ -912,8 +965,10 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
     absl::Span<const int64> broadcast_dimensions) {
   VLOG(2) << StrFormat(
       "inferring shape for <%s>(%s, %s) with broadcast_dimensions={%s}",
-      HloOpcodeString(opcode), ShapeUtil::HumanString(lhs),
-      ShapeUtil::HumanString(rhs), StrJoin(broadcast_dimensions, ", "));
+      HloOpcodeString(opcode), ShapeUtil::HumanStringWithLayout(lhs),
+      ShapeUtil::HumanStringWithLayout(rhs),
+      StrJoin(broadcast_dimensions, ", "));
+
   TF_DCHECK_OK(ShapeUtil::ValidateShapeWithOptionalLayout(lhs));
   TF_DCHECK_OK(ShapeUtil::ValidateShapeWithOptionalLayout(rhs));
 
@@ -922,18 +977,18 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   TF_RETURN_IF_ERROR(ExpectArray(
       rhs, absl::StrCat("rhs of binary operation ", HloOpcodeString(opcode))));
   switch (opcode) {
+    case HloOpcode::kAdd:
     case HloOpcode::kMaximum:
     case HloOpcode::kMinimum:
+    case HloOpcode::kMultiply:
       return InferElementwiseBinaryOpShape(opcode, lhs, rhs,
                                            broadcast_dimensions);
 
     case HloOpcode::kSubtract:
-    case HloOpcode::kAdd:
     case HloOpcode::kAtan2:
     case HloOpcode::kPower:
     case HloOpcode::kDivide:
     case HloOpcode::kRemainder:
-    case HloOpcode::kMultiply:
     case HloOpcode::kShiftLeft:
     case HloOpcode::kShiftRightArithmetic:
     case HloOpcode::kShiftRightLogical:
@@ -976,12 +1031,7 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
       }
       return InferElementwiseBinaryOpShape(opcode, lhs, rhs,
                                            broadcast_dimensions);
-    case HloOpcode::kEq:
-    case HloOpcode::kGe:
-    case HloOpcode::kGt:
-    case HloOpcode::kLe:
-    case HloOpcode::kLt:
-    case HloOpcode::kNe: {
+    case HloOpcode::kCompare: {
       TF_ASSIGN_OR_RETURN(const Shape& shape,
                           InferElementwiseBinaryOpShape(opcode, lhs, rhs,
                                                         broadcast_dimensions));
@@ -1279,16 +1329,12 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   TF_RETURN_IF_ERROR(
       ExpectArray(scale_shape, "scale input of batch norm inference"));
 
-  TF_RET_CHECK(ShapeUtil::ValidateShapeWithOptionalLayout(operand_shape) ==
-               Status::OK());
-  TF_RET_CHECK(ShapeUtil::ValidateShapeWithOptionalLayout(offset_shape) ==
-               Status::OK());
-  TF_RET_CHECK(ShapeUtil::ValidateShapeWithOptionalLayout(scale_shape) ==
-               Status::OK());
-  TF_RET_CHECK(ShapeUtil::ValidateShapeWithOptionalLayout(mean_shape) ==
-               Status::OK());
-  TF_RET_CHECK(ShapeUtil::ValidateShapeWithOptionalLayout(variance_shape) ==
-               Status::OK());
+  TF_RETURN_IF_ERROR(ShapeUtil::ValidateShapeWithOptionalLayout(operand_shape));
+  TF_RETURN_IF_ERROR(ShapeUtil::ValidateShapeWithOptionalLayout(offset_shape));
+  TF_RETURN_IF_ERROR(ShapeUtil::ValidateShapeWithOptionalLayout(scale_shape));
+  TF_RETURN_IF_ERROR(ShapeUtil::ValidateShapeWithOptionalLayout(mean_shape));
+  TF_RETURN_IF_ERROR(
+      ShapeUtil::ValidateShapeWithOptionalLayout(variance_shape));
 
   if (feature_index >= operand_shape.rank()) {
     return InvalidArgument(
@@ -1575,7 +1621,8 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
 /* static */ StatusOr<Shape> ShapeInference::InferConvolveShape(
     const Shape& lhs, const Shape& rhs, int64 feature_group_count,
     int64 batch_group_count, const Window& window,
-    const ConvolutionDimensionNumbers& dnums) {
+    const ConvolutionDimensionNumbers& dnums,
+    absl::optional<PrimitiveType> preferred_element_type) {
   TF_RETURN_IF_ERROR(ExpectArray(lhs, "lhs of convolution"));
   TF_RETURN_IF_ERROR(ExpectArray(rhs, "rhs of convolution"));
 
@@ -1598,11 +1645,6 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
         batch_group_count, feature_group_count);
   }
 
-  if (!ShapeUtil::SameElementTypeIgnoringFpPrecision(lhs, rhs)) {
-    return InvalidArgument(
-        "Convolution with different element types: %s and %s.",
-        ShapeUtil::HumanString(lhs), ShapeUtil::HumanString(rhs));
-  }
   if (dnums.input_spatial_dimensions_size() !=
       dnums.kernel_spatial_dimensions_size()) {
     return InvalidArgument(
@@ -1711,15 +1753,13 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   const int64 kernel_output_features =
       rhs.dimensions(dnums.kernel_output_feature_dimension());
 
-  if (batch_group_count > 1 && input_batch % kernel_output_features != 0) {
+  if (kernel_output_features % batch_group_count != 0) {
     return InvalidArgument(
-        "Expected output feature dimension (value %d) to be divisible by "
-        "input_batch (value %d) for batch group count %d; "
-        "got <conv>(%s, %s)\n"
+        "Expected output feature dimension size (value %d) to be a multiple of "
+        "batch group count %d; got <conv>(%s, %s)\n"
         "Dimension numbers: {%s}.",
-        kernel_output_features, input_batch, batch_group_count,
-        ShapeUtil::HumanString(lhs), ShapeUtil::HumanString(rhs),
-        dnums.DebugString());
+        kernel_output_features, batch_group_count, ShapeUtil::HumanString(lhs),
+        ShapeUtil::HumanString(rhs), dnums.DebugString());
   }
 
   if (input_features % feature_group_count != 0 ||
@@ -1734,7 +1774,14 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
         ShapeUtil::HumanString(lhs), ShapeUtil::HumanString(rhs),
         dnums.DebugString());
   }
+
   if (kernel_output_features % feature_group_count > 0) {
+    // A depthwise/grouped filter has the shape
+    // [space0, .. spaceN, GROUP_SIZE, NUM_OUTPUT_FEATURES]. When
+    // [space0, .. spaceN, GROUP_SIZE] is convolved with the input, a shape
+    // [space0, .. spaceN, feature_group_count] is formed. Therefore, the output
+    // feature count (which is equal to kernel output features) has to be a
+    // multiple of feature_group_count.
     return InvalidArgument(
         "Expected output feature dimension (value %d) to be divisible by "
         "feature_group_count (value %d); "
@@ -1745,7 +1792,7 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
         dnums.DebugString());
   }
 
-  if (input_batch % batch_group_count > 0) {
+  if (input_batch % batch_group_count != 0) {
     return InvalidArgument(
         "Expected input batch dimension (value %d) to be divisible by "
         "batch_group_count (value %d); "
@@ -1779,6 +1826,7 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   std::vector<int64> dimensions(num_dims);
   dimensions[dnums.output_batch_dimension()] = input_batch / batch_group_count;
   dimensions[dnums.output_feature_dimension()] = kernel_output_features;
+
   for (int i = 0; i < num_spatial_dims; ++i) {
     dimensions[dnums.output_spatial_dimensions(i)] =
         window_output_shape.dimensions(i);
@@ -1792,24 +1840,40 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
         // Input feature dimension is a contracting dimension, which does not
         // affect the output dimension size. So we need to do nothing.
       } else {
-        return InvalidArgument(
-            "Dynamic Spatial Convolution is not supported: lhs shape is %s ",
-            lhs.ToString());
+        for (int64 j = 0; j < dnums.output_spatial_dimensions_size(); ++j) {
+          if (i == dnums.input_spatial_dimensions(j)) {
+            // i is a spatial dimension, find corresponding output spatial
+            // dimension.
+            is_dynamic[dnums.output_spatial_dimensions(j)] = true;
+          }
+        }
       }
     }
     if (rhs.is_dynamic_dimension(i)) {
       if (i == dnums.kernel_input_feature_dimension()) {
         // Kernel feature dimension does not affect the output dimension size.
         // So we need to do nothing.
-      } else {
+      } else if (i == dnums.kernel_output_feature_dimension()) {
         return InvalidArgument(
-            "Dynamic Spatial Convolution is not supported: rhs shape is %s ",
+            "Dynamic output feature dim on convolution kernel is not "
+            "supported: rhs shape is %s ",
             rhs.ToString());
+      } else {
+        for (int64 j = 0; j < dnums.kernel_spatial_dimensions_size(); ++j) {
+          if (i == dnums.kernel_spatial_dimensions(j)) {
+            // i is a spatial dimension, find corresponding output spatial
+            // dimension.
+            is_dynamic[dnums.output_spatial_dimensions(j)] = true;
+          }
+        }
       }
     }
   }
-  return ShapeUtil::MakeShape(ShapeUtil::HigherPrecisionElementType(lhs, rhs),
-                              dimensions, is_dynamic);
+  TF_ASSIGN_OR_RETURN(
+      PrimitiveType type,
+      MaybeUpcast(ShapeUtil::HigherPrecisionElementType(lhs, rhs),
+                  preferred_element_type));
+  return ShapeUtil::MakeShape(type, dimensions, is_dynamic);
 }
 
 /* static */ StatusOr<Shape> ShapeInference::InferFftShape(
@@ -1829,7 +1893,7 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   switch (fft_type) {
     case FFT:
     case IFFT:
-      if (in.element_type() != C64) {
+      if (!primitive_util::IsComplexType(in.element_type())) {
         return InvalidArgument("%s requires complex input type, found %s.",
                                FftType_Name(fft_type),
                                PrimitiveType_Name(in.element_type()));
@@ -1837,8 +1901,8 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
       RET_CHECK_RANK(in);
       return in;
     case RFFT: {
-      if (in.element_type() != F32) {
-        return InvalidArgument("RFFT requires F32 input type, found %s.",
+      if (in.element_type() != F32 && in.element_type() != F64) {
+        return InvalidArgument("RFFT requires F32 or F64 input type, found %s.",
                                PrimitiveType_Name(in.element_type()));
       }
       RET_CHECK_RANK(in);
@@ -1853,14 +1917,18 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
               fft_length[i]);
         }
       }
-      Shape result = ShapeUtil::ChangeElementType(in, C64);
-      result.set_dimensions(result.dimensions_size() - 1,
-                            fft_length[fft_rank - 1] / 2 + 1);
+      Shape result = ShapeUtil::ChangeElementType(
+          in, in.element_type() == F32 ? C64 : C128);
+      // Preserve the size of zero-sized dimensions.
+      if (fft_length[fft_rank - 1] != 0) {
+        result.set_dimensions(result.dimensions_size() - 1,
+                              fft_length[fft_rank - 1] / 2 + 1);
+      }
       return result;
     }
     case IRFFT: {
-      if (in.element_type() != C64) {
-        return InvalidArgument("IRFFT requires C64 input type, found %s.",
+      if (!primitive_util::IsComplexType(in.element_type())) {
+        return InvalidArgument("IRFFT requires complex input type, found %s.",
                                PrimitiveType_Name(in.element_type()));
       }
       RET_CHECK_RANK(in);
@@ -1876,8 +1944,11 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
               fft_length[i]);
         }
       }
-      if (in.dimensions(in.dimensions_size() - 1) !=
-          fft_length[fft_rank - 1] / 2 + 1) {
+      // The size of zero-sized dimensions is preserved.
+      if ((in.dimensions(in.dimensions_size() - 1) != 0 ||
+           fft_length[fft_rank - 1] != 0) &&
+          in.dimensions(in.dimensions_size() - 1) !=
+              fft_length[fft_rank - 1] / 2 + 1) {
         return InvalidArgument(
             "IRFFT requires innermost dimension matches fft_length/2+1, but "
             "dimension %d is %d and should be %d.",
@@ -1892,6 +1963,89 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
       LOG(FATAL) << "Unexpected fft_type: " << fft_type;
   }
 #undef RET_CHECK_RANK
+}
+
+/* static */ StatusOr<Shape> ShapeInference::InferTriangularSolveShape(
+    const Shape& a, const Shape& b, const TriangularSolveOptions& options) {
+  if ((!ShapeUtil::ElementIsFloating(a) && !ShapeUtil::ElementIsComplex(a)) ||
+      a.element_type() != b.element_type()) {
+    return InvalidArgument(
+        "Expected element types in shape to be floating or complex and "
+        "identical for TriangularSolve; got %s and %s.",
+        PrimitiveType_Name(a.element_type()),
+        PrimitiveType_Name(b.element_type()));
+  }
+  if (a.rank() < 2) {
+    return InvalidArgument(
+        "The 'a' argument to TriangularSolve must have rank >= 2, got shape %s",
+        a.ToString());
+  }
+  if (b.rank() != a.rank()) {
+    return InvalidArgument(
+        "Arguments to triangular solve must have equal rank; got %s and %s.",
+        b.ToString(), a.ToString());
+  }
+  if (a.dimensions(a.rank() - 2) != a.dimensions(a.rank() - 1)) {
+    return InvalidArgument(
+        "The two minor dimensions of 'a' must have equal size, got %s.",
+        a.ToString());
+  }
+  if (a.dimensions(a.rank() - 1) !=
+      b.dimensions(b.rank() - (options.left_side() ? 2 : 1))) {
+    return InvalidArgument(
+        "The shared dimension of 'a' and 'b' does not match, got shapes %s and "
+        "%s",
+        a.ToString(), b.ToString());
+  }
+  absl::Span<const int64> a_batch_dims(a.dimensions());
+  absl::Span<const int64> b_batch_dims(b.dimensions());
+  a_batch_dims.remove_suffix(2);
+  b_batch_dims.remove_suffix(2);
+  if (a_batch_dims != b_batch_dims) {
+    return InvalidArgument(
+        "The leading batch dimensions of the arguments to triangular solve "
+        "must be equal; got %s and %s.",
+        b.ToString(), a.ToString());
+  }
+  if (!TriangularSolveOptions_Transpose_IsValid(options.transpose_a()) ||
+      options.transpose_a() == TriangularSolveOptions::TRANSPOSE_INVALID) {
+    return InvalidArgument(
+        "Invalid transpose option value for triangular solve (%d).\n",
+        options.transpose_a());
+  }
+  return b;
+}
+
+/* static */ StatusOr<Shape> ShapeInference::InferCholeskyShape(
+    const Shape& a) {
+  if (!ShapeUtil::ElementIsFloating(a) && !ShapeUtil::ElementIsComplex(a)) {
+    return InvalidArgument(
+        "Expected element type in shape to be floating or complex for "
+        "Cholesky; got %s.",
+        PrimitiveType_Name(a.element_type()));
+  }
+  if (a.rank() < 2) {
+    return InvalidArgument(
+        "The 'a' argument to Cholesky must have rank >= 2, got shape %s",
+        a.ToString());
+  }
+  if (a.dimensions(a.rank() - 2) != a.dimensions(a.rank() - 1)) {
+    return InvalidArgument(
+        "The two minor dimensions of 'a' must have equal size, got %s.",
+        a.ToString());
+  }
+  return a;
+}
+
+/* static */ StatusOr<Shape> ShapeInference::InferAllGatherShape(
+    const Shape& operand_shape, int64 all_gather_dimension, int64 shard_count) {
+  TF_RET_CHECK(all_gather_dimension >= 0);
+  TF_RET_CHECK(all_gather_dimension < operand_shape.rank());
+  TF_RET_CHECK(shard_count > 0);
+  auto shape = operand_shape;
+  shape.set_dimensions(all_gather_dimension,
+                       shard_count * shape.dimensions(all_gather_dimension));
+  return shape;
 }
 
 /* static */ StatusOr<Shape> ShapeInference::InferAllReduceShape(
@@ -1943,7 +2097,8 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   // returns a tuple that contains N array shapes.
   TF_RET_CHECK(!operand_shapes.empty());
   for (int i = 0; i < operand_shapes.size(); i++) {
-    if (!ShapeUtil::Equal(*operand_shapes[0], *operand_shapes[i])) {
+    if (!Shape::Equal().IgnoreMemorySpaceInLayout()(*operand_shapes[0],
+                                                    *operand_shapes[i])) {
       return InvalidArgument(
           "HLO all-to-all has operands with different shapes: the 0th "
           "operand shape %s, but the %dth operand has shape %s.",
@@ -1974,7 +2129,6 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
         arg_shapes.size());
   }
   int64 num_reduced_args = arg_shapes.size() / 2;
-
   auto reduced_args = arg_shapes.subspan(0, num_reduced_args);
   // Check that all of the reduced tensors have the same dimensions. The element
   // types may be different.
@@ -1987,7 +2141,6 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
           ShapeUtil::HumanString(*reduced_args[i]));
     }
   }
-
   // Check that the dimensions to reduce are in-bounds for the given shape.
   // We've already verified all reduced tensors have the same dimensions, so it
   // doesn't matter which one we choose.
@@ -2007,8 +2160,14 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   TF_RETURN_IF_ERROR(VerifyReducerShape(to_apply, init_values, element_types,
                                         num_reduced_args));
 
-  std::set<int64> dimensions_to_reduce_set(dimensions_to_reduce.begin(),
-                                           dimensions_to_reduce.end());
+  absl::flat_hash_set<int64> dimensions_to_reduce_set;
+  for (int64 dim_to_reduce : dimensions_to_reduce) {
+    if (!dimensions_to_reduce_set.insert(dim_to_reduce).second) {
+      return InvalidArgument("Duplicate reduction dimension: %d",
+                             dim_to_reduce);
+    }
+  }
+
   std::vector<int64> new_dimensions;
   std::vector<bool> new_is_dynamic;
   for (int i = 0; i < arg.rank(); ++i) {
@@ -2034,10 +2193,54 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
 /* static */ StatusOr<Shape> ShapeInference::InferReduceWindowShape(
     const Shape& operand_shape, const Shape& init_value_shape,
     const Window& window, const ProgramShape& to_apply_shape) {
-  TF_RETURN_IF_ERROR(ExpectArray(operand_shape, "operand of reduce-window"));
   TF_RETURN_IF_ERROR(VerifyReducerShape(to_apply_shape, {&init_value_shape},
                                         {operand_shape.element_type()},
                                         /*inputs=*/1));
+  return InferReduceWindowShape(operand_shape, init_value_shape, window);
+}
+
+/* static */ StatusOr<Shape> ShapeInference::InferReduceWindowShape(
+    absl::Span<const Shape* const> operands,
+    absl::Span<const Shape* const> init_values, const Window& window,
+    const ProgramShape& to_apply_shape) {
+  auto number_of_input = operands.size();
+  // Check that all of the reduced tensors have the same dimensions. The element
+  // types may be different.
+  for (int64 i = 1; i < number_of_input; ++i) {
+    if (!ShapeUtil::SameDimensions(*operands[0], *operands[i])) {
+      return InvalidArgument(
+          "All reduced tensors must have the same dimension. Tensor 0 has "
+          "shape %s, Tensor %d has shape %s",
+          ShapeUtil::HumanString(*operands[0]), i,
+          ShapeUtil::HumanString(*operands[i]));
+    }
+  }
+  std::vector<PrimitiveType> operand_element_type_vec;
+  for (const Shape* s : operands) {
+    operand_element_type_vec.push_back(s->element_type());
+  }
+  TF_RETURN_IF_ERROR(VerifyReducerShape(to_apply_shape, init_values,
+                                        operand_element_type_vec,
+                                        /*inputs=*/number_of_input));
+  std::vector<Shape> output_shape_vec;
+  for (int i = 0; i < operands.size(); ++i) {
+    TF_ASSIGN_OR_RETURN(
+        auto cur_output_shape,
+        InferReduceWindowShape(*operands[i], *init_values[i], window));
+    output_shape_vec.push_back(cur_output_shape);
+  }
+  if (ShapeUtil::IsScalar(to_apply_shape.result())) {
+    CHECK_EQ(output_shape_vec.size(), 1);
+    return output_shape_vec[0];
+  } else {
+    return ShapeUtil::MakeTupleShape(output_shape_vec);
+  }
+}
+
+/* static */ StatusOr<Shape> ShapeInference::InferReduceWindowShape(
+    const Shape& operand_shape, const Shape& init_value_shape,
+    const Window& window) {
+  TF_RETURN_IF_ERROR(ExpectArray(operand_shape, "operand of reduce-window"));
   return InferWindowOutputShape(operand_shape, window,
                                 init_value_shape.element_type(),
                                 /*allow_negative_padding=*/false);
@@ -2112,14 +2315,94 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
 
   // TODO(b/119580730): Remove this restriction when very large dimension size
   // is needed.
-  if (shape.dimensions(dimension) > std::numeric_limits<uint32>::max()) {
+  if (shape.dimensions(dimension) > std::numeric_limits<int32>::max()) {
     return InvalidArgument(
         "GetDimensionSize's input shape is %s, the %dth dimension exceeds the "
-        "UINT_MAX limit.",
+        "INT_MAX limit.",
         ShapeUtil::HumanString(shape), dimension);
   }
 
-  return ShapeUtil::MakeShape(U32, {});
+  return ShapeUtil::MakeShape(S32, {});
+}
+
+/* static */ StatusOr<Shape> ShapeInference::InferSetDimensionSizeShape(
+    const Shape& shape, const Shape& val_shape, int64 dimension) {
+  if (dimension < 0 || dimension >= shape.rank()) {
+    return InvalidArgument("SetDimensionSize dimension out of bounds: %d.",
+                           dimension);
+  }
+
+  if (val_shape.rank() != 0 || val_shape.element_type() != S32) {
+    return InvalidArgument(
+        "SetDimensionSize's value has to be S32 scalar, got %s",
+        val_shape.ToString());
+  }
+  // TODO(b/119580730): Remove this restriction when very large dimension size
+  // is needed.
+  if (shape.dimensions(dimension) > std::numeric_limits<int32>::max()) {
+    return InvalidArgument(
+        "SetDimensionSize's input shape is %s, the %dth dimension exceeds the "
+        "INT_MAX limit.",
+        ShapeUtil::HumanString(shape), dimension);
+  }
+
+  Shape result = shape;
+  result.set_dynamic_dimension(dimension, true);
+  return result;
+}
+
+/* static */ StatusOr<Window> ShapeInference::InferWindowFromDimensions(
+    absl::Span<const int64> window_dimensions,
+    absl::Span<const int64> window_strides,
+    absl::Span<const std::pair<int64, int64>> padding,
+    absl::Span<const int64> lhs_dilation,
+    absl::Span<const int64> rhs_dilation) {
+  const auto verify_size = [&](const size_t x, const char* x_name) {
+    if (x == 0 || x == window_dimensions.size()) {
+      return Status::OK();
+    } else {
+      return InvalidArgument(
+          "%s", absl::StrCat(
+                    "Window has different number of window dimensions than of ",
+                    x_name,
+                    "\nNumber of window dimensions: ", window_dimensions.size(),
+                    "\nNumber of ", x_name, ": ", x, "\n"));
+    }
+  };
+  TF_RETURN_IF_ERROR(verify_size(window_strides.size(), "window strides"));
+  TF_RETURN_IF_ERROR(verify_size(padding.size(), "padding entries"));
+  TF_RETURN_IF_ERROR(verify_size(lhs_dilation.size(), "lhs dilation factors"));
+  TF_RETURN_IF_ERROR(verify_size(rhs_dilation.size(), "rhs dilation factors"));
+
+  Window window;
+  for (size_t i = 0; i < window_dimensions.size(); i++) {
+    auto dim = window.add_dimensions();
+    dim->set_size(window_dimensions[i]);
+    if (!window_strides.empty()) {
+      dim->set_stride(window_strides[i]);
+    } else {
+      dim->set_stride(1);
+    }
+    if (!padding.empty()) {
+      dim->set_padding_low(padding[i].first);
+      dim->set_padding_high(padding[i].second);
+    } else {
+      dim->set_padding_low(0);
+      dim->set_padding_high(0);
+    }
+    if (!lhs_dilation.empty()) {
+      dim->set_base_dilation(lhs_dilation[i]);
+    } else {
+      dim->set_base_dilation(1);
+    }
+    if (!rhs_dilation.empty()) {
+      dim->set_window_dilation(rhs_dilation[i]);
+    } else {
+      dim->set_window_dilation(1);
+    }
+    dim->set_window_reversal(false);
+  }
+  return window;
 }
 
 /* static */ StatusOr<Shape> ShapeInference::InferSliceShape(
@@ -2181,7 +2464,16 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
     sizes.push_back((limit_index - start_index + stride - 1) / stride);
   }
 
-  return ShapeUtil::MakeShape(arg.element_type(), sizes);
+  std::vector<bool> is_dynamic(arg.rank());
+  for (int64 i = 0; i < arg.dimensions_size(); ++i) {
+    // Slicing 1 out of a dynamic dimension eliminates the dynamic dimension.
+    if (sizes[i] == 1) {
+      continue;
+    }
+    is_dynamic[i] = arg.is_dynamic_dimension(i);
+  }
+
+  return ShapeUtil::MakeShape(arg.element_type(), sizes, is_dynamic);
 }
 
 /* static */ StatusOr<Shape> ShapeInference::InferDynamicSliceShape(
@@ -2340,8 +2632,8 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
 
     if (operand_shape.rank() != number_of_indices) {
       return InvalidArgument(
-          "Dynamic update slice start number of dimensions %d must match rank "
-          "%d of slice input (%s).",
+          "Dynamic update slice start number of dimensions %d must match "
+          "rank %d of slice input (%s).",
           number_of_indices, operand_shape.rank(),
           ShapeUtil::HumanString(operand_shape));
     }
@@ -2401,7 +2693,18 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
     VLOG(2) << StrFormat("update_sizes[%d] = %d", dim, update_dim_size);
   }
 
-  return operand_shape;
+  auto result_shape = operand_shape;
+
+  // If any of the operand shape and update shape is dynamic, update the result
+  // dimension to dynamic.
+  for (int64 i = 0; i < update_shape.rank(); ++i) {
+    if (update_shape.is_dynamic_dimension(i) ||
+        operand_shape.is_dynamic_dimension(i)) {
+      result_shape.set_dynamic_dimension(i, true);
+    }
+  }
+
+  return result_shape;
 }
 
 /*static */ StatusOr<Shape> ShapeInference::InferReverseShape(
@@ -2428,7 +2731,7 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
         ShapeUtil::HumanString(arg));
   }
 
-  if (index >= arg.tuple_shapes_size()) {
+  if (index < 0 || index >= arg.tuple_shapes_size()) {
     return InvalidArgument(
         "Cannot infer shape: attempt to index out of tuple bounds: %d "
         ">= %d in shape %s.",
@@ -2458,7 +2761,8 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   };
 
   // Check the shapes of computation parameters and return types.
-  if (!ShapeUtil::Equal(condition.result(), ShapeUtil::MakeShape(PRED, {}))) {
+  if (!ShapeUtil::Compatible(condition.result(),
+                             ShapeUtil::MakeShape(PRED, {}))) {
     return InvalidArgument("Condition must return a boolean; got %s.",
                            shape_string());
   }
@@ -2475,59 +2779,55 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
 }
 
 /* static */ StatusOr<Shape> ShapeInference::InferConditionalShape(
-    const Shape& predicate, const Shape& true_operand,
-    const Shape& false_operand, const ProgramShape& true_computation,
-    const ProgramShape& false_computation) {
-  if (!ShapeUtil::Equal(predicate, ShapeUtil::MakeShape(PRED, {}))) {
-    return InvalidArgument("Predicate must be a boolean; got %s.",
-                           ShapeUtil::HumanString(predicate));
+    const Shape& branch_index,
+    absl::Span<const ProgramShape> branch_computations,
+    absl::Span<const Shape> branch_operands) {
+  if (!ShapeUtil::Compatible(branch_index, ShapeUtil::MakeShape(PRED, {})) &&
+      !ShapeUtil::Compatible(branch_index, ShapeUtil::MakeShape(S32, {}))) {
+    return InvalidArgument("branch_index must be bool or int32; got %s.",
+                           ShapeUtil::HumanString(branch_index));
   }
+  if (branch_index.element_type() == PRED) {
+    TF_RET_CHECK(2 == branch_computations.size());
+  } else {
+    TF_RET_CHECK(!branch_computations.empty());
+  }
+  TF_RET_CHECK(branch_computations.size() == branch_operands.size());
 
-  if (true_computation.parameters_size() != 1) {
-    return InvalidArgument("true_computation must take 1 argument; got %d.",
-                           true_computation.parameters_size());
-  }
-  if (!ShapeUtil::Compatible(true_computation.parameters(0), true_operand)) {
-    auto true_shape_string = [&]() {
-      return StrFormat("true_operand: %s; true_computation: %s",
-                       ShapeUtil::HumanString(true_operand),
-                       ShapeUtil::HumanString(true_computation));
-    };
-    return InvalidArgument(
-        "true_operand must match the shape of the only parameter of "
-        "true_computation: got %s.",
-        true_shape_string());
-  }
+  for (int j = 0; j < branch_computations.size(); ++j) {
+    if (branch_computations[j].parameters_size() != 1) {
+      return InvalidArgument(
+          "branch computation %d must take 1 argument; got %d.", j,
+          branch_computations[j].parameters_size());
+    }
+    if (!ShapeUtil::Compatible(branch_computations[j].parameters(0),
+                               branch_operands[j])) {
+      auto shape_string = [&]() {
+        return StrFormat("operand: %s; computation: %s",
+                         ShapeUtil::HumanString(branch_operands[j]),
+                         ShapeUtil::HumanString(branch_computations[j]));
+      };
+      return InvalidArgument(
+          "branch operand %d must match the shape of the only parameter of "
+          "branch computation %d: got %s.",
+          j, j, shape_string());
+    }
 
-  if (false_computation.parameters_size() != 1) {
-    return InvalidArgument("false_computation must take 1 argument; got %d.",
-                           false_computation.parameters_size());
+    if (!ShapeUtil::Compatible(branch_computations[0].result(),
+                               branch_computations[j].result())) {
+      auto shape_string = [&]() {
+        return StrFormat(
+            "branch 0 computation result: %s; branch %d computation result: %s",
+            ShapeUtil::HumanString(branch_computations[0].result()), j,
+            ShapeUtil::HumanString(branch_computations[j].result()));
+      };
+      return InvalidArgument(
+          "the result of branch 0 computation and branch %d computation must "
+          "have the same shape: got %s.",
+          j, shape_string());
+    }
   }
-  if (!ShapeUtil::Compatible(false_computation.parameters(0), false_operand)) {
-    auto false_shape_string = [&]() {
-      return StrFormat("false_operand: %s; false_computation: %s",
-                       ShapeUtil::HumanString(false_operand),
-                       ShapeUtil::HumanString(false_computation));
-    };
-    return InvalidArgument(
-        "false_operand must match the shape of the only parameter of "
-        "false_computation: got %s.",
-        false_shape_string());
-  }
-  if (!ShapeUtil::Compatible(true_computation.result(),
-                             false_computation.result())) {
-    auto shape_string = [&]() {
-      return StrFormat(
-          "true_computation result: %s; false_computation result: %s.",
-          ShapeUtil::HumanString(true_computation.result()),
-          ShapeUtil::HumanString(false_computation.result()));
-    };
-    return InvalidArgument(
-        "the result of true_computation and false_computation must have the "
-        "same shape: got %s.",
-        shape_string());
-  }
-  return true_computation.result();
+  return branch_computations[0].result();
 }
 
 /* static */ StatusOr<Shape> ShapeInference::InferBroadcastShape(
@@ -2545,7 +2845,13 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   std::copy(broadcast_sizes.begin(), broadcast_sizes.end(), dimensions.begin());
   std::copy(operand.dimensions().begin(), operand.dimensions().end(),
             dimensions.begin() + broadcast_sizes.size());
-  return ShapeUtil::MakeShape(operand.element_type(), dimensions);
+
+  Shape result = ShapeUtil::MakeShape(operand.element_type(), dimensions);
+  for (int64 i = 0; i < operand.dimensions_size(); ++i) {
+    result.set_dynamic_dimension(broadcast_sizes.size() + i,
+                                 operand.is_dynamic_dimension(i));
+  }
+  return result;
 }
 
 /* static */ StatusOr<Shape> ShapeInference::InferBroadcastShape(
@@ -2577,7 +2883,7 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
         operand_shape.dimensions(i) != 1) {
       return InvalidArgument(
           "Input dimension should be either 1 or equal to the output dimension "
-          "it's broadcasting into; the %lldth operand dimension is %lld, the "
+          "it is broadcasting into; the %lldth operand dimension is %lld, the "
           "%lldth output dimension is %lld.",
           i, operand_shape.dimensions(i), broadcast_dimensions[i],
           output_shape.dimensions(broadcast_dimensions[i]));
@@ -2600,9 +2906,41 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   return output_shape;
 }
 
+/* static */ StatusOr<Shape> ShapeInference::InferDynamicReshapeShape(
+    const Shape& operand, absl::Span<const Shape* const> dim_size_shapes,
+    absl::Span<const int64> new_size_bounds,
+    const std::vector<bool>& dims_are_dynamic) {
+  if (new_size_bounds.size() != dims_are_dynamic.size()) {
+    return InvalidArgument(
+        "DynamicReshape has to have the same number of elements in new_sizes "
+        "(%d) and dims_are_dynamic (%d)",
+        new_size_bounds.size(), dims_are_dynamic.size());
+  }
+
+  for (const Shape* dim_size_shape : dim_size_shapes) {
+    if (dim_size_shape->element_type() != S32 && dim_size_shape->rank() != 0) {
+      return InvalidArgument(
+          "DynamicReshape's dim size has to be scalar S32, got (%s): ",
+          dim_size_shape->ToString());
+    }
+  }
+
+  Shape inferred_shape = ShapeUtil::MakeShape(
+      operand.element_type(), new_size_bounds, dims_are_dynamic);
+  if (ShapeUtil::ElementsIn(operand) != ShapeUtil::ElementsIn(inferred_shape)) {
+    return InvalidArgument(
+        "Reshape operation has mismatched element counts: from=%d (%s) "
+        "to=%d (%s).",
+        ShapeUtil::ElementsIn(operand), ShapeUtil::HumanString(operand),
+        ShapeUtil::ElementsIn(inferred_shape),
+        ShapeUtil::HumanString(inferred_shape));
+  }
+  return inferred_shape;
+}
+
 /* static */ StatusOr<Shape> ShapeInference::InferReshapeShape(
     const Shape& operand, absl::Span<const int64> dimensions,
-    absl::Span<const int64> new_sizes) {
+    absl::Span<const int64> new_sizes, int64 inferred_dimension) {
   TF_RETURN_IF_ERROR(ExpectArray(operand, "reshape"));
 
   Shape inferred_shape =
@@ -2630,11 +2968,121 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
         StrJoin(dimensions, ","), ShapeUtil::HumanString(operand));
   }
 
-  std::vector<std::pair<int64, int64>> unmodified_dims =
-      ShapeUtil::DimensionsUnmodifiedByReshape(operand, inferred_shape);
-  for (auto& unmodified : unmodified_dims) {
-    if (operand.is_dynamic_dimension(unmodified.first)) {
-      inferred_shape.set_dynamic_dimension(unmodified.second, true);
+  // Propagate dynamic dimension.
+  auto common_factors = CommonFactors(operand.dimensions(), new_sizes);
+  for (int64 input_dim = 0; input_dim < operand.rank(); ++input_dim) {
+    if (!operand.is_dynamic_dimension(input_dim)) {
+      continue;
+    }
+
+    string reshape_debug_str = absl::StrFormat(
+        "output: %s, input: %s, input_dim: "
+        "%lld",
+        ShapeUtil::HumanString(inferred_shape), ShapeUtil::HumanString(operand),
+        input_dim);
+
+    int64 input_dim_start = -1;
+    int64 input_dim_end = -1;
+    int64 output_dim_start = -1;
+    int64 output_dim_end = -1;
+    // Find common_factors that the input_dim belongs to.
+    for (int64 i = 0; i < common_factors.size() - 1; ++i) {
+      auto start = common_factors[i];
+      auto end = common_factors[i + 1];
+      if (input_dim >= start.first && input_dim < end.first) {
+        input_dim_start = start.first;
+        input_dim_end = end.first;
+        output_dim_start = start.second;
+        output_dim_end = end.second;
+        break;
+      }
+    }
+    if ((input_dim_end - input_dim_start) > 1 &&
+        (output_dim_end - output_dim_start) > 1) {
+      // We don't support the case when a dynamic dimension is both combined
+      // with and splitted into other dimensions:
+      //
+      //  [x, yz]
+      //     | Reshape
+      //  [xy, z]
+      return Unimplemented(
+          "Dynamic input dimension to reshape that is both splitted and "
+          "combined is not supported: %s",
+          reshape_debug_str);
+    }
+
+    for (auto common_factor : common_factors) {
+      //
+      // For reshapes like:
+      //  [<=5]
+      //    | Reshape
+      //  [1, 5]
+      //
+      //  The input dynamic dimension can go into either dynamic dimensions.
+      //  However, the return value of common factors only returns
+      //  input: 5
+      //  output: 5
+      //
+      //  We need to expand common factor to include degenerated output
+      //  dimensions:
+      //  input: 5
+      //  output: 1, 5
+      //
+      //  such that in the logic later on we can consider both dimensions as
+      //  candidate.
+      if (common_factor.first == input_dim_start) {
+        output_dim_start = std::min(output_dim_start, common_factor.second);
+      }
+      if (common_factor.first == input_dim_end) {
+        output_dim_end = std::max(output_dim_end, common_factor.second);
+      }
+    }
+
+    // Calculate output dynamic reshape dimension.
+    int64 output_dynamic_dimension = -1;
+
+    if (operand.dimensions(input_dim) == 1 && !new_sizes.empty()) {
+      // If dynamic dimension is size 1, it can only be most-major or
+      // most-minor.
+      if (input_dim == 0) {
+        output_dynamic_dimension = 0;
+      }
+      if (input_dim == operand.rank() - 1) {
+        output_dynamic_dimension = new_sizes.size() - 1;
+      }
+
+      if (output_dynamic_dimension == -1) {
+        return Unimplemented(
+            "Dynamic degenerated dimension that's not most-minor nor "
+            "most-major is not supported: %s",
+            reshape_debug_str);
+      }
+    }
+
+    if (output_dynamic_dimension == -1 &&
+        output_dim_end - output_dim_start == 1) {
+      // Only one possible output dimension.
+      output_dynamic_dimension = output_dim_start;
+    }
+    if (output_dynamic_dimension == -1 &&
+        output_dim_end - output_dim_start > 1) {
+      // Multiple outputs can be dynamic, use "inferred_dimension" to tie-break.
+      output_dynamic_dimension = inferred_dimension;
+    }
+
+    if (output_dynamic_dimension != -1) {
+      // TODO(yunxing): Turn this into a CHECK.
+      inferred_shape.set_dynamic_dimension(output_dynamic_dimension, true);
+    } else {
+      std::vector<int64> output_non_degenerated;
+      for (int64 i = output_dim_start; i < output_dim_end; ++i) {
+        if (new_sizes[i] != 1) {
+          output_non_degenerated.push_back(i);
+        }
+      }
+      if (output_non_degenerated.size() == 1) {
+        inferred_shape.set_dynamic_dimension(output_non_degenerated[0], true);
+      }
     }
   }
 
@@ -2645,11 +3093,7 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
     const Shape& operand, absl::Span<const int64> dimensions) {
   TF_RETURN_IF_ERROR(ExpectArray(operand, "transpose"));
 
-  std::vector<int64> indices(operand.rank());
-  std::iota(indices.begin(), indices.end(), 0);
-  if (dimensions.size() != operand.rank() ||
-      !std::is_permutation(dimensions.begin(), dimensions.end(),
-                           indices.begin())) {
+  if (!IsPermutation(dimensions, operand.rank())) {
     return InvalidArgument(
         "Transpose dimensions [%s] are not a permutation of the operand "
         "dimensions (operand shape is %s).",
@@ -2662,45 +3106,27 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   return ShapeUtil::PermuteDimensions(InversePermutation(dimensions), operand);
 }
 
-// TODO(b/36794510): Make broadcast semantics more consistent, by supporting
-// "degenerate" cases, as with binary elementwise ops.
 /* static */ StatusOr<Shape> ShapeInference::InferClampShape(
     const Shape& min, const Shape& operand, const Shape& max) {
   TF_RETURN_IF_ERROR(ExpectArray(min, "clamp min"));
   TF_RETURN_IF_ERROR(ExpectArray(operand, "clamp operand"));
   TF_RETURN_IF_ERROR(ExpectArray(max, "clamp max"));
-  if (!ShapeUtil::SameElementTypeIgnoringFpPrecision(min, operand) ||
-      !ShapeUtil::SameElementTypeIgnoringFpPrecision(max, operand)) {
-    return InvalidArgument("Clamp with different operand types: %s, %s, %s.",
-                           ShapeUtil::HumanString(min),
-                           ShapeUtil::HumanString(operand),
-                           ShapeUtil::HumanString(max));
+
+  if (!ShapeUtil::CompatibleIgnoringFpPrecision(min, operand) ||
+      !ShapeUtil::CompatibleIgnoringFpPrecision(max, operand)) {
+    return InvalidArgument(
+        "Clamp with different shapes: %s, %s, %s.", ShapeUtil::HumanString(min),
+        ShapeUtil::HumanString(operand), ShapeUtil::HumanString(max));
   }
-  if (((ShapeUtil::CompatibleIgnoringFpPrecision(min, operand) ||
-        ShapeUtil::IsScalar(min)) &&
-       (ShapeUtil::CompatibleIgnoringFpPrecision(max, operand) ||
-        ShapeUtil::IsScalar(max)))) {
-    return operand;
-  }
-  if (ShapeUtil::IsScalar(operand)) {
-    if (ShapeUtil::CompatibleIgnoringFpPrecision(min, max)) {
-      return ShapeUtil::ChangeElementType(min, operand.element_type());
-    } else if (ShapeUtil::IsScalar(min)) {
-      return ShapeUtil::ChangeElementType(max, operand.element_type());
-    } else if (ShapeUtil::IsScalar(max)) {
-      return ShapeUtil::ChangeElementType(min, operand.element_type());
-    }
-  }
-  return Unimplemented("%s, %s <clamp> %s is not implemented.",
-                       min.ShortDebugString(), max.ShortDebugString(),
-                       operand.ShortDebugString());
+  return operand;
 }
 
-// TODO(b/36794510): Make broadcast semantics more consistent, by supporting
-// "degenerate" cases, as with binary elementwise ops, as well as scalar
-// broadcast from all operands, not just the predicate.
 /* static */ StatusOr<Shape> ShapeInference::InferSelectShape(
     const Shape& pred, const Shape& on_true, const Shape& on_false) {
+  TF_RETURN_IF_ERROR(ExpectArray(pred, "select pred"));
+  TF_RETURN_IF_ERROR(ExpectArray(on_true, "select on-true"));
+  TF_RETURN_IF_ERROR(ExpectArray(on_false, "select on-false"));
+
   if (!ShapeUtil::CompatibleIgnoringFpPrecision(on_true, on_false)) {
     return InvalidArgument(
         "Operands to select must be the same shape; got %s and %s.",
@@ -2711,18 +3137,18 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
         "Select's pred operand must have PRED element type; got %s.",
         ShapeUtil::HumanString(pred));
   }
-  if (ShapeUtil::CompatibleIgnoringElementType(pred, on_true) ||
-      ShapeUtil::IsScalar(pred)) {
-    // By this stage we know that pred's element type is PRED. Therefore, this
-    // check restricts pred to be a PRED scalar, or a PRED array with the same
-    // dimensions as on_true and on_false.
-    return ShapeUtil::ChangeElementType(
-        on_true, ShapeUtil::HigherPrecisionElementType(on_true, on_false));
+  if (!Shape::Equal()
+           .IgnoreElementType()
+           .IgnoreLayout()
+           .IgnoreDynamicDimension()(pred, on_true)) {
+    return InvalidArgument(
+        "Operands to select and predicate must be the same shape; got %s and "
+        "%s.",
+        ShapeUtil::HumanString(on_true), ShapeUtil::HumanString(pred));
   }
-  return InvalidArgument(
-      "Select operation with non-scalar predicate with dimensionality "
-      "different from the other operands: %s.",
-      ShapeUtil::HumanString(pred));
+
+  return ShapeUtil::ChangeElementType(
+      pred, ShapeUtil::HigherPrecisionElementType(on_true, on_false));
 }
 
 /* static */ StatusOr<Shape> ShapeInference::InferTupleSelectShape(
@@ -2876,7 +3302,7 @@ static Status ValidateGatherDimensionNumbers(
     const GatherDimensionNumbers& gather_dim_numbers,
     absl::Span<const int64> slice_sizes) {
   TF_RETURN_IF_ERROR(
-      ExpectArray(input_shape, "input tensor operand gather op"));
+      ExpectArray(input_shape, "input tensor operand of gather op"));
   TF_RETURN_IF_ERROR(
       ExpectArray(start_indices_shape, "gather indices operand of gather op"));
 
@@ -2902,12 +3328,20 @@ static Status ValidateGatherDimensionNumbers(
   }
 
   std::vector<int64> expanded_start_indices_shape;
+  // Also tracks if an output dimension is dynamic.
+  std::vector<bool> expanded_start_indices_shape_dynamic_dimensions;
   expanded_start_indices_shape.reserve(start_indices_shape.dimensions_size());
+  expanded_start_indices_shape_dynamic_dimensions.reserve(
+      start_indices_shape.dimensions_size());
   absl::c_copy(start_indices_shape.dimensions(),
                std::back_inserter(expanded_start_indices_shape));
+  absl::c_copy(
+      start_indices_shape.dynamic_dimensions(),
+      std::back_inserter(expanded_start_indices_shape_dynamic_dimensions));
   if (expanded_start_indices_shape.size() ==
       gather_dim_numbers.index_vector_dim()) {
     expanded_start_indices_shape.push_back(1);
+    expanded_start_indices_shape_dynamic_dimensions.push_back(false);
   }
 
   TF_RETURN_IF_ERROR(ValidateGatherDimensionNumbers(
@@ -2943,10 +3377,10 @@ static Status ValidateGatherDimensionNumbers(
   }
 
   for (int i = 0; i < gather_dim_numbers.collapsed_slice_dims_size(); i++) {
-    if (slice_sizes[gather_dim_numbers.collapsed_slice_dims(i)] != 1) {
+    if (slice_sizes[gather_dim_numbers.collapsed_slice_dims(i)] > 1) {
       return InvalidArgument(
-          "Gather op can only collapse slice dims with bound 1, but bound is "
-          "%d for index %d at position %d.",
+          "Gather op can only collapse slice dims with bound 1 or 0, but bound "
+          "is %d for index %d at position %d.",
           slice_sizes[gather_dim_numbers.collapsed_slice_dims(i)],
           gather_dim_numbers.collapsed_slice_dims(i), i);
     }
@@ -2958,8 +3392,12 @@ static Status ValidateGatherDimensionNumbers(
   int64 gather_dims_seen = 0;
   std::vector<int64> output_dim_bounds;
   output_dim_bounds.reserve(result_rank);
+
+  std::vector<bool> output_dim_is_dynamic;
+  output_dim_is_dynamic.reserve(result_rank);
   for (int64 i = 0; i < result_rank; i++) {
     int64 current_bound;
+    bool dim_dynamic = false;
     bool is_window_index =
         absl::c_binary_search(gather_dim_numbers.offset_dims(), i);
     if (is_window_index) {
@@ -2967,18 +3405,36 @@ static Status ValidateGatherDimensionNumbers(
                                    offset_dims_seen)) {
         offset_dims_seen++;
       }
+      // Gathering an entire dynamic dimension creates dynamic dimension.
+      //
+      // e.g.,:
+      //
+      // gather(input: [1,<=2,1], slice_sizes={1,2,1})
+      //
+      // creates
+      //
+      // [<=2, 1]
+      if (slice_sizes[offset_dims_seen] ==
+          input_shape.dimensions(offset_dims_seen)) {
+        dim_dynamic = input_shape.is_dynamic_dimension(offset_dims_seen);
+      }
       current_bound = slice_sizes[offset_dims_seen++];
     } else {
       if (gather_dims_seen == gather_dim_numbers.index_vector_dim()) {
         gather_dims_seen++;
       }
+      // Forward dynamic dimensions from indices.
+      dim_dynamic =
+          expanded_start_indices_shape_dynamic_dimensions[gather_dims_seen];
+
       current_bound = expanded_start_indices_shape[gather_dims_seen++];
     }
-
+    output_dim_is_dynamic.push_back(dim_dynamic);
     output_dim_bounds.push_back(current_bound);
   }
 
-  return ShapeUtil::MakeShape(input_shape.element_type(), output_dim_bounds);
+  return ShapeUtil::MakeShape(input_shape.element_type(), output_dim_bounds,
+                              output_dim_is_dynamic);
 }
 
 namespace {
@@ -3112,7 +3568,7 @@ Status ValidateScatterDimensionNumbers(
                                         /*inputs=*/1));
 
   std::vector<int64> expanded_scatter_indices_shape =
-      ArraySliceToVector(AsInt64Slice(scatter_indices_shape.dimensions()));
+      SpanToVector(scatter_indices_shape.dimensions());
   if (expanded_scatter_indices_shape.size() ==
       scatter_dim_numbers.index_vector_dim()) {
     expanded_scatter_indices_shape.push_back(1);

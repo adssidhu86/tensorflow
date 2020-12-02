@@ -1,10 +1,10 @@
-licenses(["notice"])  # Apache 2.0
+load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
+load("//tensorflow:tensorflow.bzl", "tf_gen_op_wrapper_py")
 
 package(
     default_visibility = ["//tensorflow/compiler/tf2xla:internal"],
+    licenses = ["notice"],  # Apache 2.0
 )
-
-load("//tensorflow:tensorflow.bzl", "tf_gen_op_wrapper_py")
 
 cc_library(
     name = "xla_ops",

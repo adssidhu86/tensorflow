@@ -21,7 +21,9 @@ limitations under the License.
 
 #include "absl/memory/memory.h"
 #include "absl/strings/str_cat.h"
+#include "absl/types/optional.h"
 #include "tensorflow/compiler/xla/literal.h"
+#include "tensorflow/compiler/xla/service/global_device_id.h"
 #include "tensorflow/compiler/xla/shape_util.h"
 #include "tensorflow/compiler/xla/status.h"
 #include "tensorflow/compiler/xla/status_macros.h"
@@ -37,6 +39,35 @@ using absl::StrAppend;
 using absl::StrCat;
 
 namespace xla {
+
+StatusOr<std::pair<int, int>> DeviceAssignment::LogicalIdsForDevice(
+    GlobalDeviceId device_id) const {
+  absl::optional<std::pair<int, int>> logical_ids;
+  for (int r = 0; r < replica_count(); ++r) {
+    for (int c = 0; c < computation_count(); ++c) {
+      if ((*this)(r, c) == device_id.value()) {
+        if (logical_ids.has_value()) {
+          return InternalError(
+              "Device %d appears twice in DeviceAssignment: %s",
+              device_id.value(), ToString());
+        }
+        logical_ids.emplace(r, c);
+      }
+    }
+  }
+  if (logical_ids.has_value()) {
+    return *logical_ids;
+  } else {
+    return InternalError("Device %d doesn't appear in DeviceAssignment: %s",
+                         device_id.value(), ToString());
+  }
+}
+
+StatusOr<int> DeviceAssignment::ReplicaIdForDevice(
+    GlobalDeviceId device_id) const {
+  TF_ASSIGN_OR_RETURN(auto logical_ids, LogicalIdsForDevice(device_id));
+  return logical_ids.first;
+}
 
 Status DeviceAssignment::Serialize(DeviceAssignmentProto* proto) const {
   proto->set_replica_count(replica_count());
@@ -164,6 +195,8 @@ static bool InitModule() {
       stream_executor::host::kHostPlatformId, &CreateComputationPlacer);
   xla::ComputationPlacer::RegisterComputationPlacer(
       stream_executor::cuda::kCudaPlatformId, &CreateComputationPlacer);
+  xla::ComputationPlacer::RegisterComputationPlacer(
+      stream_executor::rocm::kROCmPlatformId, &CreateComputationPlacer);
   return true;
 }
 static bool module_initialized = InitModule();

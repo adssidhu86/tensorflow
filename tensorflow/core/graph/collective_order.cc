@@ -47,6 +47,9 @@ Status DiscoverDataDependencies(
       instance_keys->push_back(instance_key);
       VLOG(2) << "collective node " << node->DebugString();
     }
+    // Avoid reference invalidation of `node_deps`.
+    data_dependencies->reserve(data_dependencies->size() + 1 +
+                               node->out_edges().size());
     const auto& node_deps = (*data_dependencies)[node];
     for (const Edge* out_edge : node->out_edges()) {
       auto& child_deps = (*data_dependencies)[out_edge->dst()];
@@ -140,7 +143,7 @@ Status CreateControlDependencies(
 
 // Insert control dependencies defined by `dependency_edges` in `graph`.  If
 // `order_type` is `kEdges`, insert explicit control edges, else if `order_type`
-// is `kAttrs`, encode depdencies as an attribute on collective node.
+// is `kAttrs`, encode dependencies as an attribute on collective node.
 Status InsertControlDependencies(
     Graph* graph, GraphCollectiveOrder order_type,
     const absl::flat_hash_map<Node*, absl::flat_hash_set<Node*>>&

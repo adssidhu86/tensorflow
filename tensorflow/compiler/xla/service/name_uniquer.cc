@@ -16,6 +16,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/name_uniquer.h"
 
 #include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "tensorflow/compiler/xla/primitive_util.h"
@@ -50,7 +51,7 @@ NameUniquer::NameUniquer(const string& separator) {
   if (!absl::ascii_isalpha(c) && c != '_') {
     result[0] = '_';
   }
-  for (int i = 1; i < result.length(); i++) {
+  for (int i = 1, iter_limit = result.length(); i < iter_limit; i++) {
     if (!IsAllowed(result[i])) {
       result[i] = '_';
     }
@@ -62,6 +63,14 @@ NameUniquer::NameUniquer(const string& separator) {
   if (primitive_util::IsPrimitiveTypeName(result) && result != "tuple") {
     result += "_";
   }
+
+  if (absl::StartsWith(result, "__") && !absl::StartsWith(result, "__xla_")) {
+    // Morph name prefix __ that is not __xla_, to avoid using name prefixes
+    // reserved by the backends, such as __llvm_retpoline_ reserved by the LLVM
+    // x86 backend.
+    result[0] = 'a';
+  }
+
   return result;
 }
 

@@ -70,7 +70,6 @@ def handle_options(func, x, axis, exclusive, reverse):
   return x
 
 
-@test_util.disable_all_xla("This test never passed for XLA")
 class CumsumTest(test.TestCase):
 
   valid_dtypes = [
@@ -107,6 +106,15 @@ class CumsumTest(test.TestCase):
           tf_out = math_ops.cumsum(x, axis).eval()
 
   @test_util.run_deprecated_v1
+  def testNaN(self):
+    for dtype in (np.float16, np.float32, np.float64):
+      for nan_idx in range(0, 5):
+        x = np.arange(1, 6).reshape([5]).astype(dtype)
+        x[nan_idx] = np.nan
+        for axis in (-1, 0):
+          self._compareAll(x, axis)
+
+  @test_util.run_deprecated_v1
   def test1D(self):
     for dtype in self.valid_dtypes:
       x = np.arange(1, 6).reshape([5]).astype(dtype)
@@ -135,6 +143,7 @@ class CumsumTest(test.TestCase):
         self._compareAll(x, axis)
 
   @test_util.run_deprecated_v1
+  @test_util.disable_xla("b/123860949")  # The computation is constant folded
   def testLarge(self):
     for dtype in self.valid_dtypes:
       x = np.ones([1000000], dtype=dtype) / 1024
@@ -194,7 +203,6 @@ class CumsumTest(test.TestCase):
           self._compareGradient([5, 10], axis, exclusive, reverse)
 
 
-@test_util.disable_all_xla("This test never passed for XLA")
 class CumprodTest(test.TestCase):
 
   valid_dtypes = [
@@ -229,6 +237,15 @@ class CumprodTest(test.TestCase):
         with self.cached_session(use_gpu=True):
           axis = constant_op.constant(0, axis_dtype)
           tf_out = math_ops.cumprod(x, axis).eval()
+
+  @test_util.run_deprecated_v1
+  def testNaN(self):
+    for dtype in (np.float16, np.float32, np.float64):
+      for nan_idx in range(0, 5):
+        x = np.arange(1, 6).reshape([5]).astype(dtype)
+        x[nan_idx] = np.nan
+        for axis in (-1, 0):
+          self._compareAll(x, axis)
 
   @test_util.run_deprecated_v1
   def test1D(self):

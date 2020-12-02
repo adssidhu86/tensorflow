@@ -19,18 +19,21 @@ from __future__ import print_function
 
 import gzip
 import os
+import pathlib
 import zlib
+
+from absl.testing import parameterized
 
 from tensorflow.python.data.kernel_tests import test_base
 from tensorflow.python.data.ops import readers
+from tensorflow.python.framework import combinations
 from tensorflow.python.framework import errors
-from tensorflow.python.framework import test_util
 from tensorflow.python.platform import test
 from tensorflow.python.util import compat
 
 
-@test_util.run_all_in_graph_and_eager_modes
-class FixedLengthRecordDatasetTest(test_base.DatasetTestBase):
+class FixedLengthRecordDatasetTest(test_base.DatasetTestBase,
+                                   parameterized.TestCase):
 
   def setUp(self):
     super(FixedLengthRecordDatasetTest, self).setUp()
@@ -126,15 +129,19 @@ class FixedLengthRecordDatasetTest(test_base.DatasetTestBase):
     with self.assertRaises(errors.OutOfRangeError):
       self.evaluate(get_next())
 
+  @combinations.generate(test_base.default_test_combinations())
   def testFixedLengthRecordDatasetNoCompression(self):
     self._testFixedLengthRecordDataset()
 
+  @combinations.generate(test_base.default_test_combinations())
   def testFixedLengthRecordDatasetGzipCompression(self):
     self._testFixedLengthRecordDataset(compression_type="GZIP")
 
+  @combinations.generate(test_base.default_test_combinations())
   def testFixedLengthRecordDatasetZlibCompression(self):
     self._testFixedLengthRecordDataset(compression_type="ZLIB")
 
+  @combinations.generate(test_base.default_test_combinations())
   def testFixedLengthRecordDatasetBuffering(self):
     test_filenames = self._createFiles()
     dataset = readers.FixedLengthRecordDataset(
@@ -149,6 +156,24 @@ class FixedLengthRecordDatasetTest(test_base.DatasetTestBase):
           [self._record(j, i) for i in range(self._num_records)])
     self.assertDatasetProduces(dataset, expected_output=expected_output)
 
+  @combinations.generate(test_base.default_test_combinations())
+  def testFixedLengthRecordDatasetParallelRead(self):
+    test_filenames = self._createFiles()
+    dataset = readers.FixedLengthRecordDataset(
+        test_filenames,
+        self._record_bytes,
+        self._header_bytes,
+        self._footer_bytes,
+        buffer_size=10,
+        num_parallel_reads=4)
+    expected_output = []
+    for j in range(self._num_files):
+      expected_output.extend(
+          [self._record(j, i) for i in range(self._num_records)])
+    self.assertDatasetProduces(dataset, expected_output=expected_output,
+                               assert_items_equal=True)
+
+  @combinations.generate(test_base.default_test_combinations())
   def testFixedLengthRecordDatasetWrongSize(self):
     test_filenames = self._createFiles()
     dataset = readers.FixedLengthRecordDataset(
@@ -165,6 +190,24 @@ class FixedLengthRecordDatasetTest(test_base.DatasetTestBase):
             r"file \".*fixed_length_record.0.txt\" has body length 21 bytes, "
             r"which is not an exact multiple of the record length \(4 bytes\).")
         )
+
+  @combinations.generate(test_base.default_test_combinations())
+  def testFixedLengthRecordDatasetPathlib(self):
+    test_filenames = self._createFiles()
+    test_filenames = [pathlib.Path(f) for f in test_filenames]
+    dataset = readers.FixedLengthRecordDataset(
+        test_filenames,
+        self._record_bytes,
+        self._header_bytes,
+        self._footer_bytes,
+        buffer_size=10,
+        num_parallel_reads=4)
+    expected_output = []
+    for j in range(self._num_files):
+      expected_output.extend(
+          [self._record(j, i) for i in range(self._num_records)])
+    self.assertDatasetProduces(dataset, expected_output=expected_output,
+                               assert_items_equal=True)
 
 
 if __name__ == "__main__":

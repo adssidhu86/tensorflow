@@ -48,14 +48,13 @@ void SetDataTypeForAllOutputs(Model* model, Operator* op,
   }
   // Record data types of output before processing, so we can see at the
   // end if we changed anything, and return the correct boolean value.
-  std::unordered_map<string, ArrayDataType> old_output_data_types;
+  std::unordered_map<std::string, ArrayDataType> old_output_data_types;
   for (const auto& output : op->outputs) {
     old_output_data_types[output] = model->GetArray(output).data_type;
   }
   // Do the actual output data types propagation.
   switch (op->type) {
     case OperatorType::kDequantize:
-    case OperatorType::kResizeBilinear:
       // These operators unconditionally produce float outputs
       SetDataTypeForAllOutputs(model, op, ArrayDataType::kFloat);
       break;
@@ -73,10 +72,16 @@ void SetDataTypeForAllOutputs(Model* model, Operator* op,
       SetDataTypeForAllOutputs(model, op, ArrayDataType::kBool);
       break;
     case OperatorType::kRank:
-    case OperatorType::kShape:
       // These operators only produce int32 outputs.
       SetDataTypeForAllOutputs(model, op, ArrayDataType::kInt32);
       break;
+    case OperatorType::kShape: {
+      // Shape op could produce int32 or int64 result. Set the output type
+      // based on the `output_data_type` field.
+      auto* shape_op = static_cast<TensorFlowShapeOperator*>(op);
+      SetDataTypeForAllOutputs(model, op, shape_op->output_data_type);
+      break;
+    }
     case OperatorType::kSplit:
     case OperatorType::kConcat:
     case OperatorType::kFill: {
@@ -165,8 +170,8 @@ void SetDataTypeForAllOutputs(Model* model, Operator* op,
       if (unsupported_op->output_data_types.size() < op->outputs.size()) {
         return ::tensorflow::Status::OK();
       }
-      for (int i = 0; i < op->outputs.size(); ++i) {
-        const string& output = op->outputs[i];
+      for (size_t i = 0; i < op->outputs.size(); ++i) {
+        const std::string& output = op->outputs[i];
         const ArrayDataType data_type = unsupported_op->output_data_types[i];
         model->GetArray(output).data_type = data_type;
       }
@@ -284,6 +289,20 @@ void SetDataTypeForAllOutputs(Model* model, Operator* op,
       // mixed (8bit vs 16bit) cases. Fortunately, that should never be needed,
       // as the data formats, such as TFLITE, that have LstmCell nodes, also
       // have data type fields for all their arrays.
+      break;
+    }
+    case OperatorType::kMatrixDiag: {
+      CHECK_EQ(op->inputs.size(), 1);
+      CHECK_EQ(op->outputs.size(), 1);
+      const ArrayDataType data_type = model->GetArray(op->inputs[0]).data_type;
+      SetDataTypeForAllOutputs(model, op, data_type);
+      break;
+    }
+    case OperatorType::kMatrixSetDiag: {
+      CHECK_EQ(op->inputs.size(), 2);
+      CHECK_EQ(op->outputs.size(), 1);
+      const ArrayDataType data_type = model->GetArray(op->inputs[0]).data_type;
+      SetDataTypeForAllOutputs(model, op, data_type);
       break;
     }
     default: {

@@ -14,14 +14,17 @@ limitations under the License.
 ==============================================================================*/
 
 #include "tensorflow/core/grappler/graph_view.h"
+
 #include "absl/container/flat_hash_set.h"
 #include "absl/strings/str_cat.h"
 #include "tensorflow/cc/ops/parsing_ops.h"
 #include "tensorflow/cc/ops/standard_ops.h"
+#include "tensorflow/core/graph/benchmark_testlib.h"
 #include "tensorflow/core/grappler/grappler_item.h"
 #include "tensorflow/core/grappler/inputs/trivial_test_graph_input_yielder.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/test.h"
+#include "tensorflow/core/platform/test_benchmark.h"
 
 namespace tensorflow {
 namespace grappler {
@@ -96,7 +99,7 @@ TEST_F(GraphViewTest, OpPortIdToArgIdSparseSplit) {
 
 TEST_F(GraphViewTest, ParseSingleExample) {
   tensorflow::Scope s = tensorflow::Scope::NewRootScope();
-  Output a = ops::Const<string>(s.WithOpName("a"), "", {});
+  Output a = ops::Const<tstring>(s.WithOpName("a"), "", {});
   Output b = ops::Const<int64>(s.WithOpName("b"), 1, {1, 1});
   ops::ParseSingleExample c(s.WithOpName("c"), a, {b, b}, 2, {"w", "x"},
                             {"y", "z"}, {DT_INT64, DT_INT64}, {{1}, {1}});
@@ -132,14 +135,14 @@ TEST_F(GraphViewTest, BasicGraph) {
   EXPECT_EQ(input.node->name(), "AddN");
   EXPECT_EQ(input.port_id, 0);
   GraphView::OutputPort fanin = graph.GetRegularFanin(input);
-  EXPECT_EQ(fanin.node->name(), "Square");
+  EXPECT_EQ(fanin.node->name(), "Sign");
   EXPECT_EQ(fanin.port_id, 0);
 
   input = graph.GetInputPort("AddN", 1);
   EXPECT_EQ(input.node->name(), "AddN");
   EXPECT_EQ(input.port_id, 1);
   fanin = graph.GetRegularFanin(input);
-  EXPECT_EQ(fanin.node->name(), "Square_1");
+  EXPECT_EQ(fanin.node->name(), "Sign_1");
   EXPECT_EQ(fanin.port_id, 0);
 
   GraphView::OutputPort output = graph.GetOutputPort("AddN", 0);
@@ -167,7 +170,7 @@ TEST_F(GraphViewTest, BasicGraph) {
   EXPECT_EQ(fanouts, expected_fanouts);
 
   absl::flat_hash_set<string> fanins;
-  absl::flat_hash_set<string> expected_fanins = {"Square_1:0", "Square:0"};
+  absl::flat_hash_set<string> expected_fanins = {"Sign_1:0", "Sign:0"};
   for (const auto& fi : graph.GetFanins(*add_node, false)) {
     fanins.insert(absl::StrCat(fi.node->name(), ":", fi.port_id));
   }
@@ -288,6 +291,216 @@ TEST_F(GraphViewTest, GetRegularFaninPortOutOfBounds) {
   auto d_output_control = graph.GetRegularFanin({d_node, Graph::kControlSlot});
   EXPECT_EQ(d_output_control, GraphView::OutputPort());
 }
+
+void BM_GraphViewConstruction(::testing::benchmark::State& state) {
+  const int num_nodes = state.range(0);
+  const int num_edges_per_node = state.range(1);
+
+  const GraphDef graph_def =
+      test::CreateGraphDef(num_nodes, num_edges_per_node);
+
+  for (auto s : state) {
+    GraphView graph_view(&graph_def);
+  }
+}
+
+BENCHMARK(BM_GraphViewConstruction)
+    ->ArgPair(10, 2)
+    ->ArgPair(100, 2)
+    ->ArgPair(1000, 2)
+    ->ArgPair(10000, 2)
+    ->ArgPair(25000, 2)
+    ->ArgPair(50000, 2)
+    ->ArgPair(100000, 2)
+    ->ArgPair(10, 4)
+    ->ArgPair(100, 4)
+    ->ArgPair(1000, 4)
+    ->ArgPair(10000, 4)
+    ->ArgPair(25000, 4)
+    ->ArgPair(50000, 4)
+    ->ArgPair(100000, 4)
+    ->ArgPair(10, 8)
+    ->ArgPair(100, 8)
+    ->ArgPair(1000, 8)
+    ->ArgPair(10000, 8)
+    ->ArgPair(25000, 8)
+    ->ArgPair(50000, 8)
+    ->ArgPair(100000, 8)
+    ->ArgPair(10, 16)
+    ->ArgPair(100, 16)
+    ->ArgPair(1000, 16)
+    ->ArgPair(10000, 16)
+    ->ArgPair(25000, 16)
+    ->ArgPair(50000, 16)
+    ->ArgPair(100000, 16);
+
+void BM_GraphViewGetNode(::testing::benchmark::State& state) {
+  const int num_nodes = state.range(0);
+
+  const GraphDef graph_def =
+      test::CreateGraphDef(num_nodes, /*num_edges_per_node=*/16);
+  GraphView graph_view(&graph_def);
+
+  for (auto s : state) {
+    graph_view.GetNode("out");
+  }
+}
+
+BENCHMARK(BM_GraphViewGetNode)
+    ->Arg(10)
+    ->Arg(100)
+    ->Arg(1000)
+    ->Arg(10000)
+    ->Arg(25000)
+    ->Arg(50000)
+    ->Arg(100000);
+
+#define RUN_FANIN_FANOUT_BENCHMARK(name) \
+  BENCHMARK(name)                        \
+      ->ArgPair(10, 10)                  \
+      ->ArgPair(10, 100)                 \
+      ->ArgPair(10, 1000)                \
+      ->ArgPair(10, 10000)               \
+      ->ArgPair(10, 100000)              \
+      ->ArgPair(100, 10)                 \
+      ->ArgPair(100, 100)                \
+      ->ArgPair(100, 1000)               \
+      ->ArgPair(100, 10000)              \
+      ->ArgPair(100, 100000)             \
+      ->ArgPair(1000, 10)                \
+      ->ArgPair(1000, 100)               \
+      ->ArgPair(1000, 1000)              \
+      ->ArgPair(1000, 10000)             \
+      ->ArgPair(1000, 100000)            \
+      ->ArgPair(10000, 10)               \
+      ->ArgPair(10000, 100)              \
+      ->ArgPair(10000, 1000)             \
+      ->ArgPair(10000, 10000)            \
+      ->ArgPair(10000, 100000)           \
+      ->ArgPair(100000, 10)              \
+      ->ArgPair(100000, 100)             \
+      ->ArgPair(100000, 1000)            \
+      ->ArgPair(100000, 10000)           \
+      ->ArgPair(100000, 100000);
+
+void BM_GraphViewGetFanout(::testing::benchmark::State& state) {
+  const int num_fanins = state.range(0);
+  const int num_fanouts = state.range(1);
+
+  const GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
+      num_fanins, num_fanouts, num_fanins, num_fanouts,
+      /*fanout_unique_index=*/true);
+  GraphView graph_view(&graph_def);
+
+  for (auto s : state) {
+    const NodeDef* node = graph_view.GetNode("node");
+    graph_view.GetFanout({node, 0});
+  }
+}
+
+RUN_FANIN_FANOUT_BENCHMARK(BM_GraphViewGetFanout);
+
+void BM_GraphViewGetFanin(::testing::benchmark::State& state) {
+  const int num_fanins = state.range(0);
+  const int num_fanouts = state.range(1);
+
+  const GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
+      num_fanins, num_fanouts, num_fanins, num_fanouts,
+      /*fanout_unique_index=*/true);
+  GraphView graph_view(&graph_def);
+
+  for (auto s : state) {
+    const NodeDef* node = graph_view.GetNode("node");
+    graph_view.GetFanin({node, 0});
+  }
+}
+
+RUN_FANIN_FANOUT_BENCHMARK(BM_GraphViewGetFanin);
+
+void BM_GraphViewGetRegularFanin(::testing::benchmark::State& state) {
+  const int num_fanins = state.range(0);
+  const int num_fanouts = state.range(1);
+
+  const GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
+      num_fanins, num_fanouts, num_fanins, num_fanouts,
+      /*fanout_unique_index=*/true);
+  GraphView graph_view(&graph_def);
+
+  for (auto s : state) {
+    const NodeDef* node = graph_view.GetNode("node");
+    graph_view.GetRegularFanin({node, 0});
+  }
+}
+
+RUN_FANIN_FANOUT_BENCHMARK(BM_GraphViewGetRegularFanin);
+
+void BM_GraphViewGetFanouts(::testing::benchmark::State& state) {
+  const int num_fanins = state.range(0);
+  const int num_fanouts = state.range(1);
+
+  const GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
+      num_fanins, num_fanouts, num_fanins, num_fanouts,
+      /*fanout_unique_index=*/true);
+  GraphView graph_view(&graph_def);
+
+  for (auto s : state) {
+    const NodeDef* node = graph_view.GetNode("node");
+    graph_view.GetFanouts(*node, /*include_controlled_nodes=*/false);
+  }
+}
+
+RUN_FANIN_FANOUT_BENCHMARK(BM_GraphViewGetFanouts);
+
+void BM_GraphViewGetFanins(::testing::benchmark::State& state) {
+  const int num_fanins = state.range(0);
+  const int num_fanouts = state.range(1);
+
+  const GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
+      num_fanins, num_fanouts, num_fanins, num_fanouts,
+      /*fanout_unique_index=*/true);
+  GraphView graph_view(&graph_def);
+
+  for (auto s : state) {
+    const NodeDef* node = graph_view.GetNode("node");
+    graph_view.GetFanins(*node, /*include_controlling_nodes=*/false);
+  }
+}
+
+RUN_FANIN_FANOUT_BENCHMARK(BM_GraphViewGetFanins);
+
+void BM_GraphViewGetFanoutEdges(::testing::benchmark::State& state) {
+  const int num_fanins = state.range(0);
+  const int num_fanouts = state.range(1);
+
+  const GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
+      num_fanins, num_fanouts, num_fanins, num_fanouts,
+      /*fanout_unique_index=*/true);
+  GraphView graph_view(&graph_def);
+
+  for (auto s : state) {
+    const NodeDef* node = graph_view.GetNode("node");
+    graph_view.GetFanoutEdges(*node, /*include_controlled_edges=*/false);
+  }
+}
+
+RUN_FANIN_FANOUT_BENCHMARK(BM_GraphViewGetFanoutEdges);
+
+void BM_GraphViewGetFaninEdges(::testing::benchmark::State& state) {
+  const int num_fanins = state.range(0);
+  const int num_fanouts = state.range(1);
+
+  const GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
+      num_fanins, num_fanouts, num_fanins, num_fanouts,
+      /*fanout_unique_index=*/true);
+  GraphView graph_view(&graph_def);
+
+  for (auto s : state) {
+    const NodeDef* node = graph_view.GetNode("node");
+    graph_view.GetFaninEdges(*node, /*include_controlling_edges=*/false);
+  }
+}
+
+RUN_FANIN_FANOUT_BENCHMARK(BM_GraphViewGetFaninEdges);
 
 }  // namespace
 }  // namespace grappler

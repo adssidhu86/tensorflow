@@ -1,15 +1,17 @@
 # Description:
 #   C++ implementation code for the summary writing APIs.
 
-package(default_visibility = ["//tensorflow:internal"])
-
-licenses(["notice"])  # Apache 2.0
-
+load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 load(
     "//tensorflow:tensorflow.bzl",
     "tf_cc_binary",
     "tf_cc_test",
     "tf_copts",
+)
+
+package(
+    default_visibility = ["//tensorflow:internal"],
+    licenses = ["notice"],  # Apache 2.0
 )
 
 cc_library(
@@ -106,8 +108,8 @@ cc_library(
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
-        "//tensorflow/core:png_internal",
         "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core/lib/png:png_io",
     ],
 )
 

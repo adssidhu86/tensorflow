@@ -14,30 +14,47 @@ limitations under the License.
 ==============================================================================*/
 
 #include "tensorflow/core/profiler/rpc/profiler_server.h"
+
 #include <memory>
-#include <utility>
+#include <string>
+
 #include "grpcpp/grpcpp.h"
-#include "tensorflow/contrib/tpu/profiler/tpu_profiler.grpc.pb.h"
+#include "absl/strings/str_cat.h"
+#include "tensorflow/core/platform/logging.h"
+#include "tensorflow/core/platform/types.h"
+#include "tensorflow/core/profiler/profiler_service.grpc.pb.h"
 #include "tensorflow/core/profiler/rpc/profiler_service_impl.h"
-#include "tensorflow/core/util/ptr_util.h"
 
 namespace tensorflow {
+namespace profiler {
 
-std::unique_ptr<Thread> StartProfilerServer(EagerContext* const eager_context,
-                                            int32 port) {
-  return WrapUnique(eager_context->TFEnv()->StartThread(
-      {}, "profiler server", [eager_context, port]() {
-        string server_address = strings::StrCat("0.0.0.0:", port);
-        std::unique_ptr<TPUProfiler::Service> service =
-            CreateProfilerService(eager_context);
-        ::grpc::ServerBuilder builder;
-        builder.AddListeningPort(server_address,
-                                 ::grpc::InsecureServerCredentials());
-        builder.RegisterService(service.get());
-        std::unique_ptr<::grpc::Server> server(builder.BuildAndStart());
-        LOG(INFO) << "Profiling Server listening on " << server_address;
-        server->Wait();
-      }));
+void ProfilerServer::StartProfilerServer(int32 port) {
+  VLOG(1) << "Starting profiler server.";
+  std::string server_address = absl::StrCat("[::]:", port);
+  service_ = CreateProfilerService();
+  ::grpc::ServerBuilder builder;
+
+  int selected_port = 0;
+  builder.AddListeningPort(server_address, ::grpc::InsecureServerCredentials(),
+                           &selected_port);
+  builder.RegisterService(service_.get());
+  server_ = builder.BuildAndStart();
+  if (!selected_port) {
+    LOG(ERROR) << "Unable to bind to " << server_address
+               << " selected port:" << selected_port;
+  } else {
+    LOG(INFO) << "Profiler server listening on " << server_address
+              << " selected port:" << selected_port;
+  }
 }
 
+ProfilerServer::~ProfilerServer() {
+  if (server_) {
+    server_->Shutdown();
+    server_->Wait();
+    LOG(INFO) << "Profiler server was shut down";
+  }
+}
+
+}  // namespace profiler
 }  // namespace tensorflow

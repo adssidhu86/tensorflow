@@ -42,7 +42,14 @@ class HloSharding {
  public:
   // Creates a trivial sharding that replicates a maximal tile across all
   // devices.
-  static HloSharding Replicate() { return HloSharding(); }
+  static HloSharding Replicate() {
+    return HloSharding(/*manual=*/false, /*replicated=*/true);
+  }
+
+  // Creates a sharding that represents the op is manually partitioned.
+  static HloSharding Manual() {
+    return HloSharding(/*manual=*/true, /*replicated=*/false);
+  }
 
   // Creates a sharding that emulates device placement; a tile shape equal to
   // the input shape (one tile) assigned to a single device.
@@ -53,6 +60,19 @@ class HloSharding {
   static HloSharding Tile(const Array<int64>& tile_assignment) {
     return HloSharding(tile_assignment);
   }
+
+  // Creates a new sharding where data is replicated within each replication
+  // group, and sharded across replication groups according to
+  // group_tile_assignment. Replication group members will be sorted.
+  static HloSharding PartialTile(
+      const Array<int64>& group_tile_assignment,
+      absl::Span<const absl::Span<const int64>> replication_groups);
+
+  // Creates a partially replicated tiled sharding with device-level tile
+  // assignment, where the last dimension is the additional replication
+  // dimension. Replication group members will be sorted.
+  static HloSharding PartialTile(
+      const Array<int64>& tile_assignment_last_dim_replicate);
 
   // Creates a new sharding which splits a one-dimensional input shape into
   // `num_tiles` tiles.
@@ -115,12 +135,26 @@ class HloSharding {
     });
   }
 
+  // Returns whether the sharding represents manual partitioning.
+  bool IsManual() const {
+    if (!IsTuple()) {
+      return manual_;
+    }
+    return absl::c_all_of(tuple_elements_,
+                          [](const HloSharding& s) { return s.IsManual(); });
+  }
+
+  // Returns if the sharding has partial replication and partial sharding. If
+  // true, data is sharded according to other dimensions of tile_assignment(),
+  // but replicated across devices along the last dimension.
+  bool ReplicateOnLastTileDim() const { return replicate_on_last_tile_dim_; }
+
   // Returns true if the sharding defines an operation on the given device.
   bool UsesDevice(int64 device) const;
 
-  // Retrieves an histogram of the devices used by the sharding. The returned
+  // Retrieves a histogram of the devices used by the sharding. The returned
   // map has the device number as key, and the occurrence count as value.
-  // If a sharding does not have a device, it will not be incuded in the
+  // If a sharding does not have a device, it will not be included in the
   // histogram. The count argument, if not nullptr, will receive the total
   // number of elements this sharding is made of (one for array, N leaves for
   // tuples).
@@ -132,6 +166,10 @@ class HloSharding {
 
   // Returns the device that should execute the given tile.
   // It is an error to call this if is_replicated() is true.
+  // When ReplicateOnLastTileDim() == true, if index.size() == data rank, it
+  // returns the first device in that replicated subgroup; otherwise,
+  // index.size() should be the same as tile_assignment()'s rank and specifies
+  // the member of the replication subgroup.
   // REQUIRES: !IsTuple()
   int64 DeviceForTileIndex(absl::Span<const int64> index) const;
 
@@ -187,8 +225,10 @@ class HloSharding {
 
   bool operator==(const HloSharding& other) const {
     return replicated_ == other.replicated_ && maximal_ == other.maximal_ &&
+           manual_ == other.manual_ &&
            tile_assignment_ == other.tile_assignment_ &&
-           tuple_elements_ == other.tuple_elements_;
+           tuple_elements_ == other.tuple_elements_ &&
+           replicate_on_last_tile_dim_ == other.replicate_on_last_tile_dim_;
   }
   bool operator!=(const HloSharding& other) const { return !(*this == other); }
 
@@ -207,6 +247,7 @@ class HloSharding {
   // Returns the flattened list of all the leaf shardings in a tuple shape, by
   // pre-order walk (ShapeTree iterator order).
   // REQUIRES: IsTuple().
+  std::vector<HloSharding>& tuple_elements() { return tuple_elements_; }
   const std::vector<HloSharding>& tuple_elements() const {
     return tuple_elements_;
   }
@@ -215,12 +256,22 @@ class HloSharding {
   // REQUIRES: !IsTuple()
   Shape TileShape(const Shape& shape) const;
 
+  // Gets the tile shape on the device.
+  // REQUIRES: !IsTuple()
+  Shape TileShape(const Shape& shape, int64 device) const;
+
+  // Gets the number of tiles. If it has partial replication, this will not
+  // equal the device count.
+  int64 NumTiles() const;
+
  private:
-  HloSharding()
-      : replicated_(true),
-        maximal_(true),
+  explicit HloSharding(bool manual, bool replicated)
+      : replicated_(replicated),
+        maximal_(replicated),
         tuple_(false),
-        tile_assignment_({0}) {}
+        manual_(manual),
+        tile_assignment_({0}),
+        replicate_on_last_tile_dim_(false) {}
   // device_id values:
   // -2: magic number to mean unassigned device, used by spatial partitioning
   // -1: the id of the host
@@ -231,18 +282,25 @@ class HloSharding {
       : replicated_(false),
         maximal_(true),
         tuple_(false),
-        tile_assignment_({1}, device_id) {}
-  explicit HloSharding(const Array<int64>& tile_assignment)
+        manual_(false),
+        tile_assignment_({1}, device_id),
+        replicate_on_last_tile_dim_(false) {}
+  explicit HloSharding(const Array<int64>& tile_assignment,
+                       bool replicate_on_last_tile_dim = false)
       : replicated_(false),
         maximal_(false),
         tuple_(false),
-        tile_assignment_(tile_assignment) {}
+        manual_(false),
+        tile_assignment_(tile_assignment),
+        replicate_on_last_tile_dim_(replicate_on_last_tile_dim) {}
   explicit HloSharding(const std::vector<HloSharding>& tuple_shardings)
       : replicated_(false),
         maximal_(false),
         tuple_(true),
+        manual_(false),
         tile_assignment_({0}),
-        tuple_elements_(tuple_shardings) {}
+        tuple_elements_(tuple_shardings),
+        replicate_on_last_tile_dim_(false) {}
 
   // Checks that the number of elements in tuple_elements_ is consistent with
   // the tuple shape passes as argument.
@@ -260,11 +318,30 @@ class HloSharding {
   bool replicated_;
   bool maximal_;
   bool tuple_;
+  bool manual_;
+  // This field is only used if replicated_ is false. If maximal_ is true, then
+  // the field contains a rank 1 array with a single element, which is the
+  // device the HLO is assigned to. If maximal_ is false, the field contains an
+  // array with the same rank as the corresponding HLO. The dimension sizes of
+  // the array describe the number of ways the HLO is partitioned along each
+  // dimension. The values of the array specify which device each tile of
+  // the HLO is assigned to. The index of each value determines which tile it
+  // takes.
+  // For example, {{{2, 3}}, {{5, 7}}} (whose ToString representation is
+  // "{devices=[2,1,2]2,3,5,7}"), means that dimension 1 is split two way and
+  // dimension 3 is split 2 way. Core 5, whose index is [2,1,1] will take the
+  // tile that contains the 2nd half of dimension 1 and the 1st half of
+  // dimension 3.
   Array<int64> tile_assignment_;
   // Only non-empty when tuple_ is true. If a tuple is empty then one entry is
   // present for the root. This is a flattened list of all the leaf shardings in
   // a tuple shape, by pre-order walk (ShapeTree iterator order).
   std::vector<HloSharding> tuple_elements_;
+  // This flag is to support partial replication and partial sharding. If it is
+  // true, tile_assignment_ will have an extra dimension in addition to the data
+  // shape rank, and the added last dimension represents the subgroups of
+  // replications, i.e., elements in slice [..., :] will be replicated.
+  bool replicate_on_last_tile_dim_;
 };
 
 std::ostream& operator<<(std::ostream& out, const HloSharding& sharding);
