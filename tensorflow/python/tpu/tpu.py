@@ -28,6 +28,7 @@ from absl import logging
 import numpy as np
 from six.moves import xrange  # pylint: disable=redefined-builtin
 
+from tensorflow.compiler.tf2xla.python import xla as tf2xla
 from tensorflow.core.framework import attr_value_pb2
 from tensorflow.core.protobuf.tpu import dynamic_padding_pb2 as dynamic_padding
 from tensorflow.core.protobuf.tpu import tpu_embedding_configuration_pb2 as embedding_pb2
@@ -1032,7 +1033,7 @@ def _pad_all_input(
         need_padding.append(np.full_like(input_shape, False, dtype=bool))
       else:
         for i, s in enumerate(input_shape):
-          if not s or s != maximum_static_shapes[idx][i]:
+          if s is None or s != maximum_static_shapes[idx][i]:
             need_padding[idx][i] = True
         maximum_static_shapes[idx] = max(input_shape,
                                          maximum_static_shapes[idx])
@@ -1081,7 +1082,7 @@ def _pad_all_input(
             # The minimum padded dimension size is 2 as XLA doesn't support size
             # 1 dynamic size.
             minimum_dynamic_dim_size = 2
-            if s.value:
+            if s.value is not None:
               # Pad to the given maximum value.
               max_dim_size = max(s.value, minimum_dynamic_dim_size)
             else:
@@ -1350,15 +1351,13 @@ def split_compile_and_replicate(
     nest.assert_same_structure(flat_inputs[0], flat_maximum_shapes,
                                check_types=False)
 
-    flat_inputs, padding_maps = _pad_all_input(flat_inputs, flat_maximum_shapes,
+    unpadded_inputs = flat_inputs
+    flat_inputs, padding_maps = _pad_all_input(unpadded_inputs,
+                                               flat_maximum_shapes,
                                                padding_spec)
     if padding_maps:
       dynamic_shape_inputs = True
-
-    serialized_padding_maps = []
-    for padding_map in padding_maps:
-      serialized_padding_maps.append(padding_map.SerializeToString())
-    metadata_kwargs["padding_map"] = serialized_padding_maps
+      logging.info("TPU has inputs with dynamic shapes: %s", unpadded_inputs[0])
 
   metadata_kwargs["step_marker_location"] = getattr(
       computation, "step_marker_location", "STEP_MARK_AT_ENTRY")
@@ -1396,6 +1395,16 @@ def split_compile_and_replicate(
 
     with tpu_function.tpu_shard_context(
         num_replicas), ops.control_dependencies([metadata]):
+
+      if dynamic_shape_inputs:
+        for padding_map in padding_maps:
+          input_shape = flat_replicated_inputs[padding_map.arg_index].shape
+          flat_replicated_inputs[
+              padding_map.arg_index] = tf2xla.set_dynamic_dimension_size(
+                  flat_replicated_inputs[padding_map.arg_index],
+                  padding_map.shape_index,
+                  flat_replicated_inputs[padding_map.padding_arg_index])
+          flat_replicated_inputs[padding_map.arg_index].set_shape(input_shape)
 
       # Add identity ops so even unused inputs are "consumed" by the
       # computation. This is to avoid orphaned TPUReplicatedInput nodes.

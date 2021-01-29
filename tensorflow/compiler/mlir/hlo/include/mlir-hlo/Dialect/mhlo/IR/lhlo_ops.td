@@ -85,6 +85,8 @@ def LHLO_AbsOp: LHLO_UnaryElementwiseOp<"abs">, BASE_HLO_AbsOp;
 def LHLO_BitcastConvertOp:
     LHLO_UnaryElementwiseOp<"bitcast_convert", LHLO_Buffer, [SameOperandsShape]>, BASE_HLO_BitcastConvertOp;
 
+def LHLO_CbrtOp: LHLO_UnaryElementwiseOp<"cbrt", LHLO_FpBuffer>, BASE_HLO_CbrtOp;
+
 def LHLO_CeilOp: LHLO_UnaryElementwiseOp<"ceil", LHLO_FpBuffer>, BASE_HLO_CeilOp;
 
 def LHLO_ClzOp: LHLO_UnaryElementwiseOp<"count_leading_zeros", LHLO_IntBuffer>, BASE_HLO_ClzOp;
@@ -111,6 +113,8 @@ def LHLO_IsFiniteOp: LHLO_Op<"is_finite", [SameOperandsShape]>, BASE_HLO_IsFinit
 }
 
 def LHLO_LogOp: LHLO_UnaryElementwiseOp<"log", LHLO_FpOrComplexBuffer>, BASE_HLO_LogOp;
+
+def LHLO_LogisticOp : LHLO_UnaryElementwiseOp<"logistic", LHLO_FpOrComplexBuffer>, BASE_HLO_LogisticOp;
 
 def LHLO_Log1pOp: LHLO_UnaryElementwiseOp<"log_plus_one", LHLO_FpOrComplexBuffer>, BASE_HLO_Log1pOp;
 
@@ -212,9 +216,7 @@ def LHLO_ReduceOp: LHLO_Op<"reduce", [SameVariadicOperandSize]>, BASE_HLO_Reduce
   let regions = (region SizedRegion<1>:$body);
 }
 
-def LHLO_ReduceWindowOp: LHLO_Op<"reduce_window", [
-      SingleBlockImplicitTerminator<"TerminatorOp">
-    ]>, BASE_HLO_ReduceWindowOp {
+def LHLO_ReduceWindowOp: LHLO_Op<"reduce_window", []>, BASE_HLO_ReduceWindowOp {
 
   let arguments = (ins
     Arg<LHLO_Buffer, "", [MemRead]>:$operand,
@@ -307,12 +309,22 @@ def LHLO_SliceOp: LHLO_Op<
   );
 }
 
-def HLO_DynamicUpdateSliceOp: LHLO_Op<"dynamic-update-slice", []> {
+def LHLO_DynamicSliceOp: LHLO_Op<"dynamic_slice",
+      [AllElementTypesMatch<["operand", "output"]>]>, BASE_HLO_DynamicSliceOp {
+  let arguments = (ins
+    Arg<LHLO_Buffer, "", [MemRead]>:$operand,
+    Arg<Variadic<LHLO_Buffer>, "", [MemRead]>:$start_indices,
+    Arg<LHLO_Buffer, "", [MemWrite]>:$output,
+    I64ElementsAttr:$slice_sizes
+  );
+}
+
+def LHLO_DynamicUpdateSliceOp: LHLO_Op<"dynamic-update-slice", []>, BASE_HLO_DynamicUpdateSliceOp {
   let arguments = (ins
     Arg<LHLO_Buffer, "", [MemRead]>:$operand,
     Arg<LHLO_Buffer, "", [MemRead]>:$update,
-    Arg<LHLO_Buffer, "", [MemWrite]>:$output,
-    Arg<Variadic<LHLO_Buffer>, "", [MemRead]>:$start_indices
+    Arg<Variadic<LHLO_Buffer>, "", [MemRead]>:$start_indices,
+    Arg<LHLO_Buffer, "", [MemWrite]>:$output
   );
 }
 
@@ -415,7 +427,7 @@ def LHLO_ConvOp : LHLO_Op<"convolution", []>, BASE_HLO_ConvOp {
        Arg<LHLO_Buffer, "", [MemRead]>:$lhs,
        Arg<LHLO_Buffer, "", [MemRead]>:$rhs,
        Arg<LHLO_Buffer, "", [MemWrite]>:$output),
-    ConvolutionAttributes<LHLO_Dialect>.attributes);
+    ConvolutionAttributes.attributes);
 }
 
 def LHLO_CopyOp: LHLO_Op<"copy", [CopyOpInterface]>, BASE_HLO_CopyOp {
@@ -532,17 +544,22 @@ def LHLO_ReducePrecisionOp: LHLO_Op<"reduce_precision", [SameTypeOperands]>,
   );
 }
 
-def LHLO_AllReduceOp : LHLO_Op<"all_reduce", [SameTypeOperands]>,
+def LHLO_AllReduceOp : LHLO_Op<"all_reduce", [SameVariadicOperandSize]>,
                        BASE_HLO_AllReduceOp {
   let arguments = (ins
-    Arg<LHLO_Buffer, "", [MemRead]>:$operand,
-    Arg<LHLO_Buffer, "", [MemWrite]>:$output,
+    Arg<Variadic<LHLO_Buffer>, "", [MemRead]>:$operands,
+    Arg<Variadic<LHLO_Buffer>, "", [MemWrite]>:$results,
     I64ElementsAttr:$replica_groups,
     DefaultValuedAttr<BoolAttr, "false">:$constrain_layout,
     OptionalAttr<ChannelHandle>:$channel_id,
     DefaultValuedAttr<BoolAttr, "false">:$use_global_device_ids
   );
   let regions = (region SizedRegion<1>:$computation);
+  let verifier = [{ return Verify(*this); }];
+  let extraClassDeclaration = [{
+    // AllReduce is cross replica if channel_id is not set.
+    bool IsCrossReplica() { return !channel_id().hasValue(); }
+  }];
 }
 
 def LHLO_CollectivePermuteOp: LHLO_Op<"collective_permute", [SameTypeOperands]>,
@@ -573,16 +590,16 @@ def LHLO_CholeskyOp: LHLO_Op<"cholesky", [SameOperandsElementType]>, BASE_HLO_Ch
   );
 }
 
-def LHLO_Infeed: LHLO_Op<"infeed", []>, BASE_HLO_InfeedOp {
+def LHLO_InfeedOp: LHLO_Op<"infeed", []>, BASE_HLO_InfeedOp {
   let arguments = (ins
-    Arg<LHLO_Buffer, "", [MemWrite]>:$output,
+    Arg<Variadic<LHLO_Buffer>, "", [MemWrite]>:$outputs,
     DefaultValuedAttr<StrAttr, "">:$config
   );
 }
 
-def LHLO_Outfeed: LHLO_Op<"outfeed", []> {
+def LHLO_OutfeedOp: LHLO_Op<"outfeed", []> {
   let arguments = (ins
-    Arg<LHLO_Buffer, "", [MemRead]>:$operand,
+    Arg<Variadic<LHLO_Buffer>, "", [MemRead]>:$operands,
     DefaultValuedAttr<StrAttr, "">:$config
   );
 }

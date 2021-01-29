@@ -1784,19 +1784,24 @@ name=None))
     ...     num_parallel_calls=tf.data.AUTOTUNE,
     ...     deterministic=False)
 
+    The order of elements yielded by this transformation is deterministic if
+    `deterministic=True`. If `map_func` contains stateful operations and
+    `num_parallel_calls > 1`, the order in which that state is accessed is
+    undefined, so the values of output elements may not be deterministic
+    regardless of the `deterministic` flag value.
+
     Args:
       map_func: A function mapping a dataset element to another dataset element.
-      num_parallel_calls: (Optional.) A `tf.int32` scalar `tf.Tensor`,
+      num_parallel_calls: (Optional.) A `tf.int64` scalar `tf.Tensor`,
         representing the number elements to process asynchronously in parallel.
         If not specified, elements will be processed sequentially. If the value
         `tf.data.AUTOTUNE` is used, then the number of parallel
         calls is set dynamically based on available CPU.
       deterministic: (Optional.) A boolean controlling whether determinism
-        should be traded for performance by allowing elements to be produced out
+        should be traded for performance by allowing elements to be yielded out
         of order.  If `deterministic` is `None`, the
         `tf.data.Options.experimental_deterministic` dataset option (`True` by
-        default) is used to decide whether to produce elements
-        deterministically.
+        default) is used to decide whether to run deterministically.
 
     Returns:
       Dataset: A `Dataset`.
@@ -1925,8 +1930,7 @@ name=None))
         should be traded for performance by allowing elements to be produced out
         of order.  If `deterministic` is `None`, the
         `tf.data.Options.experimental_deterministic` dataset option (`True` by
-        default) is used to decide whether to produce elements
-        deterministically.
+        default) is used to decide whether to run deterministically.
 
     Returns:
       Dataset: A `Dataset`.
@@ -3281,6 +3285,11 @@ class DatasetSpec(type_spec.BatchableTypeSpec):
   def value_type(self):
     return Dataset
 
+  @property
+  def element_spec(self):
+    """The inner element spec."""
+    return self._element_spec
+
   def _serialize(self):
     return (self._element_spec, self._dataset_shape)
 
@@ -4557,6 +4566,15 @@ class _OptimizeDataset(UnaryUnchangedStructureDataset):
     self._input_dataset = input_dataset
     if optimization_configs is None:
       optimization_configs = []
+
+    # We sort the options here before embedding as constant tensors to ensure
+    # that serialization to NodeDef is determinstic.
+    if optimizations_enabled:
+      optimizations_enabled.sort()
+    if optimizations_disabled:
+      optimizations_disabled.sort()
+    if optimizations_default:
+      optimizations_default.sort()
 
     self._optimizations_enabled = convert.optional_param_to_tensor(
         argument_name="optimizations_enabled",

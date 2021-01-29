@@ -176,6 +176,9 @@ populate_tflite_source_vars("." TFLITE_SRCS)
 # XNNPACK delegate is preferred to the weak-symbol one.
 list(FILTER TFLITE_SRCS EXCLUDE REGEX ".*tflite_with_xnnpack\\.cc$")
 
+# Exclude Flex related files.
+list(FILTER TFLITE_SRCS EXCLUDE REGEX ".*with_selected_ops\\.cc$")
+
 if(_TFLITE_ENABLE_MMAP)
   list(FILTER TFLITE_SRCS EXCLUDE REGEX ".*mmap_allocation_disabled\\.cc$")
 else()
@@ -203,6 +206,7 @@ endif()
 if(TFLITE_ENABLE_GPU)
   find_package(opencl_headers REQUIRED)
   find_package(vulkan_headers REQUIRED)
+  find_package(fp16_headers REQUIRED)
   # Android NDK already has OpenGL, EGL headers.
   if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
     find_package(opengl_headers REQUIRED)
@@ -217,29 +221,24 @@ if(TFLITE_ENABLE_GPU)
     FILTER "(_test)\\.(cc|h)$"
   )
   populate_tflite_source_vars(
-    "delegates/gpu/cl/kernels/special"
-    TFLITE_DELEGATES_GPU_CL_KERNELS_SPECIAL_SRCS
-    FILTER "(_test)\\.(cc|h)$"
-  )
-  populate_tflite_source_vars(
-    "delegates/gpu/cl/selectors" TFLITE_DELEGATES_GPU_CL_SELECTORS_SRCS
-    FILTER "(_test)\\.(cc|h)$"
-  )
-  populate_tflite_source_vars(
-    "delegates/gpu/cl/selectors/default" TFLITE_DELEGATES_GPU_CL_SELECTORS_DEFAULT_SRCS
-    FILTER "(_test)\\.(cc|h)$"
-  )
-  populate_tflite_source_vars(
-    "delegates/gpu/common" TFLITE_DELEGATES_GPU_COMMON_SRCS
-    FILTER "(_test)\\.(cc|h)$"
-  )
-  populate_tflite_source_vars(
     "delegates/gpu/common/default" TFLITE_DELEGATES_GPU_COMMON_DEFAULT_SRCS
     FILTER "(_test)\\.(cc|h)$"
   )
   populate_tflite_source_vars(
     "delegates/gpu/common/memory_management"
     TFLITE_DELEGATES_GPU_COMMON_MEMORY_MANAGEMENT_SRCS
+    FILTER "(_test)\\.(cc|h)$"
+  )
+  populate_tflite_source_vars(
+    "delegates/gpu/common/selectors" TFLITE_DELEGATES_GPU_COMMON_SELECTORS_SRCS
+    FILTER "(_test)\\.(cc|h)$"
+  )
+  populate_tflite_source_vars(
+    "delegates/gpu/common/selectors/default" TFLITE_DELEGATES_GPU_COMMON_SELECTORS_DEFAULT_SRCS
+    FILTER "(_test)\\.(cc|h)$"
+  )
+  populate_tflite_source_vars(
+    "delegates/gpu/common" TFLITE_DELEGATES_GPU_COMMON_SRCS
     FILTER "(_test)\\.(cc|h)$"
   )
   populate_tflite_source_vars(
@@ -265,14 +264,14 @@ if(TFLITE_ENABLE_GPU)
   list(APPEND TFLITE_DELEGATES_GPU_SRCS
     ${TFLITE_SOURCE_DIR}/delegates/gpu/api.cc
     ${TFLITE_SOURCE_DIR}/delegates/gpu/delegate.cc
+    ${TFLITE_SOURCE_DIR}/experimental/acceleration/compatibility/android_info.cc
     ${TFLITE_DELEGATES_GPU_CL_SRCS}
     ${TFLITE_DELEGATES_GPU_CL_KERNELS_SRCS}
-    ${TFLITE_DELEGATES_GPU_CL_KERNELS_SPECIAL_SRCS}
-    ${TFLITE_DELEGATES_GPU_CL_SELECTORS_SRCS}
-    ${TFLITE_DELEGATES_GPU_CL_SELECTORS_DEFAULT_SRCS}
-    ${TFLITE_DELEGATES_GPU_COMMON_SRCS}
     ${TFLITE_DELEGATES_GPU_COMMON_DEFAULT_SRCS}
     ${TFLITE_DELEGATES_GPU_COMMON_MEMORY_MANAGEMENT_SRCS}
+    ${TFLITE_DELEGATES_GPU_COMMON_SELECTORS_SRCS}
+    ${TFLITE_DELEGATES_GPU_COMMON_SELECTORS_DEFAULT_SRCS}
+    ${TFLITE_DELEGATES_GPU_COMMON_SRCS}
     ${TFLITE_DELEGATES_GPU_COMMON_TASK_SRCS}
     ${TFLITE_DELEGATES_GPU_COMMON_TASKS_SRCS}
     ${TFLITE_DELEGATES_GPU_COMMON_TASKS_SPECIAL_SRCS}
@@ -331,7 +330,7 @@ if(TFLITE_ENABLE_RUY)
 endif()
 populate_tflite_source_vars("kernels"
   TFLITE_KERNEL_SRCS
-  FILTER ".*(_test_util_internal|test_main)\\.(cc|h)"
+  FILTER "(.*_test_util_internal|test_.*)\\.(cc|h)"
 )
 populate_tflite_source_vars("kernels/internal" TFLITE_KERNEL_INTERNAL_SRCS)
 populate_tflite_source_vars("kernels/internal/optimized"

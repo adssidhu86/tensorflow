@@ -14,6 +14,7 @@
 # ==============================================================================
 
 load("@flatbuffers//:build_defs.bzl", "flatbuffer_cc_library", "flatbuffer_java_library", "flatc_path")
+load("//tensorflow:tensorflow.bzl", "get_compatible_with_portable")
 
 package(
     default_visibility = [
@@ -32,6 +33,7 @@ genrule(
     $(location {}) --proto -o $(@D) $(location :configuration.proto)
     perl -p -i -e 's/tflite.proto/tflite/' $(@D)/configuration.fbs
     """.format(flatc_path),
+    compatible_with = get_compatible_with_portable(),
     tools = [
         flatc_path,
     ],
@@ -68,6 +70,7 @@ java_lite_proto_library(
 flatbuffer_cc_library(
     name = "configuration_fbs",
     srcs = [":configuration.fbs"],
+    compatible_with = get_compatible_with_portable(),
 )
 
 flatbuffer_java_library(
@@ -91,11 +94,12 @@ cc_library(
 
 cc_library(
     name = "delegate_registry",
-    srcs = ["delegate_registry.cc"],
     hdrs = ["delegate_registry.h"],
     deps = [
         ":configuration_fbs",
+        "//tensorflow/lite:mutable_op_resolver",
         "//tensorflow/lite/c:common",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/synchronization",
     ],
 )

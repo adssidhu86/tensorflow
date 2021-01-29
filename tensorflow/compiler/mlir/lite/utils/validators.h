@@ -20,7 +20,7 @@ limitations under the License.
 #define TENSORFLOW_COMPILER_MLIR_LITE_UTILS_VALIDATORS_H_
 
 #include "mlir/Dialect/StandardOps/IR/Ops.h"  // from @llvm-project
-#include "mlir/IR/StandardTypes.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 
 namespace mlir {
 namespace TFL {
@@ -62,6 +62,18 @@ inline bool TFTypeIsBFloat16Tensor(Value value) {
   auto tensorType = value.getType().dyn_cast<TensorType>();
   if (!tensorType) return false;
   return tensorType.getElementType().isBF16();
+}
+
+// Returns true iff the given value is a f16 tensor.
+inline bool TFTypeIsHalfTensor(Value value) {
+  auto tensorType = value.getType().dyn_cast<TensorType>();
+  if (!tensorType) return false;
+  return tensorType.getElementType().isF16();
+}
+
+// Returns true iff the given value is a f16 or bf16 tensor.
+inline bool TFTypeIsBFloat16OrHalfTensor(Value value) {
+  return TFTypeIsBFloat16Tensor(value) || TFTypeIsHalfTensor(value);
 }
 
 // Returns true iff the given TensorFlow op has a `padding` attribute whose

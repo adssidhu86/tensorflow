@@ -32,7 +32,6 @@ limitations under the License.
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "llvm/ADT/SmallVector.h"
 #include "tensorflow/compiler/xla/status.h"
 #include "tensorflow/compiler/xla/status_macros.h"
 #include "tensorflow/compiler/xla/types.h"
@@ -503,8 +502,10 @@ int64 Product(absl::Span<const int64> xs);
 //         b[j_k] × b[j_k + 1] × ... × b[j_(k+1) - 1]
 // where `CommonFactors(a, b)[CommonFactors(a, b).size - 1] = (a.size, b.size)`
 //
-// If the given shapes have non-zero size, returns the bounds of the shortest
-// possible such subsequences; else, returns `{(0, 0), (a.size, b.size)}`.
+// If input and output are the same, return {(0, 0), {1, 1}, ... {a.size,
+// b.size}}, otherwise if the given shapes have non-zero size, returns the
+// bounds of the shortest possible such subsequences; else, returns `{(0, 0),
+// (a.size, b.size)}`.
 absl::InlinedVector<std::pair<int64, int64>, 8> CommonFactors(
     absl::Span<const int64> a, absl::Span<const int64> b);
 
@@ -578,11 +579,6 @@ Status EraseElementFromVector(std::vector<T>* container, const T& value) {
 // Note: The resulting representation can still only represent 8-bit exponent
 // range that is available in F32s (out of a total of 11 exponent bits in F64s).
 std::pair<float, float> SplitF64ToF32(double x);
-
-template <typename T>
-std::vector<T> ToStdVector(const llvm::SmallVectorImpl<T>& v) {
-  return std::vector<T>(v.begin(), v.end());
-}
 
 // MakeCleanup(f) returns an RAII cleanup object that calls 'f' in its
 // destructor. The easiest way to use MakeCleanup is with a lambda argument,

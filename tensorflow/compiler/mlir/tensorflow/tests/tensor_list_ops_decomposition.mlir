@@ -515,7 +515,7 @@ func @main(%arg0: tensor<i1>) -> () {
 }
 
 // CHECK: func private @callee(%[[ARG0:.*]]: tensor<10xf32>, %[[ARG1:.*]]: tensor<i1>, %[[ARG2:.*]]: tensor<1xi32>) -> (tensor<10xf32>, tensor<1xi32>)
-func @callee(%arg0: tensor<!tf.variant<tensor<f32>>>, %arg1: tensor<i1>) -> tensor<!tf.variant<tensor<f32>>> attributes {sym_visibility = "private"} {
+func private @callee(%arg0: tensor<!tf.variant<tensor<f32>>>, %arg1: tensor<i1>) -> tensor<!tf.variant<tensor<f32>>> {
   %elem = "tf._SomeOp"(%arg1) : (tensor<i1>) -> tensor<f32>
 
   // CHECK-NOT: "tf.TensorListPushBack"
@@ -574,6 +574,18 @@ func @main(%arg0: tensor<i32>) -> () {
   %elem_shape = "tf.Const"() {value = dense<> : tensor<0xi32>} : () -> tensor<0xi32>
   // expected-error @+1 {{unknown max element count}}
   %tl = "tf.EmptyTensorList"(%elem_shape, %arg0) : (tensor<0xi32>, tensor<i32>) -> tensor<!tf.variant<tensor<f32>>>
+  return
+}
+
+// -----
+
+// Tests that the pass reports error on unknown element shape.
+
+func @main()  -> () {
+  %elem_shape = "tf.Const"() {value = dense<[-1, 1]> : tensor<2xi32>} : () -> tensor<2xi32>
+  %max_size = "tf.Const"() {value = dense<10> : tensor<i32>} : () -> tensor<i32>
+  // expected-error @+1 {{unknown tensor list element shape}}
+  %tl = "tf.EmptyTensorList"(%elem_shape, %max_size) : (tensor<2xi32>, tensor<i32>) -> tensor<!tf.variant<tensor<?x1xf32>>>
   return
 }
 

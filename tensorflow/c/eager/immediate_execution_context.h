@@ -25,6 +25,7 @@ limitations under the License.
 #include "tensorflow/c/eager/immediate_execution_operation.h"
 #include "tensorflow/c/eager/immediate_execution_tensor_handle.h"
 #include "tensorflow/c/tensor_interface.h"
+#include "tensorflow/core/framework/function.h"
 #include "tensorflow/core/framework/function.pb.h"
 #include "tensorflow/core/framework/numeric_types.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -110,6 +111,12 @@ class ImmediateExecutionContext : public AbstractContext {
   // already exists.
   virtual Status AddFunctionDef(const FunctionDef& fdef) = 0;
 
+  // Same as `AddFunctionDef`, but additionally saves the `stack_traces` under
+  // the key of the function definition name (to be retrieved during function
+  // instantiation).
+  virtual Status AddFunctionDefWithStackTraces(
+      const FunctionDef& fdef, const StackTracesMap& stack_traces) = 0;
+
   // Find and return a added function by its name.
   virtual const FunctionDef* FindFunctionDef(const string& name) const = 0;
 
@@ -175,6 +182,11 @@ class ImmediateExecutionContext : public AbstractContext {
   // Convert a TFRT TensorHandle to tensorflow::TensorHandle.
   virtual ImmediateExecutionTensorHandle* TFTensorHandleFromInterface(
       ImmediateExecutionTensorHandle* handle) = 0;
+
+  virtual std::vector<std::string> GetLoggedOpsTestonly() { return {}; }
+
+  // Get a list of the names of functions that have been registered.
+  virtual std::vector<string> ListFunctionNames() = 0;
 
   //===--------------------------------------------------------------------===//
   // Distributed runtime related functions.
