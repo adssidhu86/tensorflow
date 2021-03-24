@@ -66,6 +66,7 @@ from tensorflow.python.util.tf_export import tf_export
 _SESSION_PROVIDER = None
 
 
+@tf_export("__internal__.tracking.register_session_provider", v1=[])
 def register_session_provider(session_provider):
   global _SESSION_PROVIDER
   if _SESSION_PROVIDER is None:
@@ -665,6 +666,7 @@ class _LoadStatus(object):
     return self
 
 
+@tf_export("__internal__.tracking.streaming_restore", v1=[])
 def streaming_restore(status, session=None):
   """When graph building, runs restore ops as soon as they come in.
 
@@ -2132,7 +2134,8 @@ class Checkpoint(tracking.AutoTrackable):
 
     # You can also pass options to read(). For example this
     # runs the IO ops on the localhost:
-    options = tf.CheckpointOptions(experimental_io_device="/job:localhost")
+    options = tf.train.CheckpointOptions(
+        experimental_io_device="/job:localhost")
     checkpoint.read(path, options=options)
     ```
 

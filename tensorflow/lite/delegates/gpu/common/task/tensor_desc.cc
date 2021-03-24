@@ -134,6 +134,7 @@ GPUResources TensorDescriptor::GetGPUResources() const {
              storage_type == TensorStorageType::TEXTURE_2D) {
     GPUImage2DDescriptor desc;
     desc.data_type = data_type;
+    desc.normalized = false;
     desc.access_type = access_type_;
     resources.images2d.push_back({"image2d", desc});
   } else if (storage_type == TensorStorageType::TEXTURE_ARRAY) {
@@ -206,6 +207,8 @@ absl::Status TensorDescriptor::PerformSelector(
     return PerformWriteSelector(gpu_info, args, result);
   } else if (selector == "WriteLinear") {
     return PerformWriteLinearSelector(gpu_info, args, result);
+  } else if (selector == "Write2D") {
+    return PerformWrite2DSelector(gpu_info, args, result);
   } else if (selector == "GetAddress") {
     return PerformGetAddressSelector(args, result);
   } else if (selector == "GetPtrWithSliceOffset") {
@@ -310,6 +313,21 @@ absl::Status TensorDescriptor::PerformWriteLinearSelector(
     return absl::NotFoundError("Unrecognized WriteLinear selector");
   }
   *result = Write(gpu_info, args[0], {args[1]});
+  return absl::OkStatus();
+}
+
+absl::Status TensorDescriptor::PerformWrite2DSelector(
+    const GpuInfo& gpu_info, const std::vector<std::string>& args,
+    std::string* result) const {
+  if (storage_type != TensorStorageType::TEXTURE_2D) {
+    return absl::InvalidArgumentError(
+        "Write2D selector can be used only with 2d "
+        "storages(TEXTURE_2D)");
+  }
+  if (args.size() != 3) {
+    return absl::NotFoundError("Unrecognized Write2D selector");
+  }
+  *result = Write(gpu_info, args[0], {args[1], args[2]});
   return absl::OkStatus();
 }
 
@@ -969,9 +987,9 @@ int GetChannelsAlignment(const TensorDescriptor& desc, const BHWDC& shape) {
 }
 }  // namespace
 
-template <typename T>
-void DataFromBHWDC(const float* src, const BHWDC& shape,
-                   const TensorDescriptor& desc, T* dst) {
+template <typename FromType, typename ToType>
+void DataFromBHWDC(const FromType* src, const BHWDC& shape,
+                   const TensorDescriptor& desc, ToType* dst) {
   const int channels_alignment = GetChannelsAlignment(desc, shape);
   const int slices = DivideRoundUp(shape.c, 4);
   for (int b = 0; b < shape.b; ++b) {
@@ -980,13 +998,13 @@ void DataFromBHWDC(const float* src, const BHWDC& shape,
         for (int x = 0; x < shape.w; ++x) {
           for (int d = 0; d < shape.d; ++d) {
             for (int c = 0; c < channels_alignment; ++c) {
-              float value;
+              FromType value;
               if (s * 4 + c < shape.c) {
                 const int cpu_index =
                     shape.LinearIndex({b, y, x, d, s * 4 + c});
                 value = src[cpu_index];
               } else {
-                value = 0.0f;
+                value = 0;
               }
               int gpu_index = GetLinearIndex(desc, shape, b, x, y, d, s, c);
               dst[gpu_index] = value;
@@ -998,14 +1016,16 @@ void DataFromBHWDC(const float* src, const BHWDC& shape,
   }
 }
 
-template void DataFromBHWDC<float>(const float* src, const BHWDC& shape,
-                                   const TensorDescriptor& desc, float* dst);
-template void DataFromBHWDC<half>(const float* src, const BHWDC& shape,
-                                  const TensorDescriptor& desc, half* dst);
+template void DataFromBHWDC<float, float>(const float* src, const BHWDC& shape,
+                                          const TensorDescriptor& desc,
+                                          float* dst);
+template void DataFromBHWDC<float, half>(const float* src, const BHWDC& shape,
+                                         const TensorDescriptor& desc,
+                                         half* dst);
 
-template <typename T>
-void DataToBHWDC(const T* src, const BHWDC& shape, const TensorDescriptor& desc,
-                 float* dst) {
+template <typename FromType, typename ToType>
+void DataToBHWDC(const FromType* src, const BHWDC& shape,
+                 const TensorDescriptor& desc, ToType* dst) {
   const int channels_alignment = GetChannelsAlignment(desc, shape);
   const int slices = DivideRoundUp(shape.c, 4);
   for (int b = 0; b < shape.b; ++b) {
@@ -1028,10 +1048,12 @@ void DataToBHWDC(const T* src, const BHWDC& shape, const TensorDescriptor& desc,
   }
 }
 
-template void DataToBHWDC<float>(const float* src, const BHWDC& shape,
-                                 const TensorDescriptor& desc, float* dst);
-template void DataToBHWDC<half>(const half* src, const BHWDC& shape,
-                                const TensorDescriptor& desc, float* dst);
+template void DataToBHWDC<float, float>(const float* src, const BHWDC& shape,
+                                        const TensorDescriptor& desc,
+                                        float* dst);
+template void DataToBHWDC<half, float>(const half* src, const BHWDC& shape,
+                                       const TensorDescriptor& desc,
+                                       float* dst);
 
 }  // namespace gpu
 }  // namespace tflite

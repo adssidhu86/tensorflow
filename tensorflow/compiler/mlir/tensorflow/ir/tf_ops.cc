@@ -65,6 +65,8 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_side_effects.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_structs.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
+#include "tensorflow/core/framework/op.h"
+#include "tensorflow/core/framework/op_def_builder.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/util/tensor_format.h"
 
@@ -175,9 +177,15 @@ bool TensorFlowDialect::CanDuplicate(Operation *op) {
   if (auto is_stateless = op->getAttrOfType<BoolAttr>("is_stateless"))
     return is_stateless.getValue();
 
-  // Otherwise, assume ops can be duplicated by default if its registered, else
-  // it cannot be for unknown ops.
-  return op->isRegistered();
+  // Assume ops can be duplicated when the given op is not a stateful op.
+  const tensorflow::OpRegistrationData *op_reg_data = nullptr;
+  tensorflow::Status s = tensorflow::OpRegistry::Global()->LookUp(
+      op->getName().stripDialect().str(), &op_reg_data);
+  if (!s.ok()) {
+    // Assume unknown ops can not be duplicated.
+    return false;
+  }
+  return !op_reg_data->op_def.is_stateful();
 }
 
 // Returns true if the op can have side effects.
@@ -191,7 +199,7 @@ bool TensorFlowDialect::CanHaveSideEffects(Operation *op) {
     return !is_stateless.getValue();
 
   // Terminators defined in the TF dialect do not have side effects.
-  if (op->isKnownTerminator()) return false;
+  if (op->hasTrait<OpTrait::IsTerminator>()) return false;
 
   // Otherwise assume that the op can have side effects.
   return true;
@@ -217,14 +225,10 @@ TensorFlowDialect::TensorFlowDialect(MLIRContext *context)
 #define GET_OP_LIST
 #include "tensorflow/compiler/mlir/tensorflow/ir/tfrt_ops.cc.inc"
       >();
-  addTypes<
-#define HANDLE_TF_TYPE(tftype, enumerant, name) tftype##Type,
-#define HANDLE_LAST_TF_TYPE(tftype, enumerant, name) tftype##Type
-#include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.def"
-      >();
+  registerTypes();
   addInterfaces<TFInlinerInterface, TFDecodeAttributesInterface,
                 TFConstantFoldInterface>();
-  addAttributes<ShapeAttr, FuncAttr>();
+  registerAttributes();
 
   // Support unknown operations because not all TensorFlow operations are
   // registered.
@@ -355,8 +359,6 @@ Type TensorFlowDialect::parseType(DialectAsmParser &parser) const {
   StringRef data;
   if (parser.parseKeyword(&data)) return Type();
 
-  Location loc = parser.getEncodedSourceLoc(parser.getNameLoc());
-
 #define HANDLE_TF_TYPE(tftype, enumerant, name) \
   if (data == name) return tftype##Type::get(getContext());
 // Custom TensorFlow types are handled separately at the end as they do partial
@@ -365,9 +367,18 @@ Type TensorFlowDialect::parseType(DialectAsmParser &parser) const {
 // NOLINTNEXTLINE
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.def"
 
-  if (data.startswith("resource")) return ParseResourceType(parser, loc);
-  if (data.startswith("variant")) return ParseVariantType(parser, loc);
-  return (emitError(loc, "unknown TensorFlow type: " + data), nullptr);
+  llvm::SMLoc loc = parser.getNameLoc();
+  if (data.startswith("resource")) {
+    Type ret = ParseResourceType(parser);
+    if (!ret) parser.emitError(loc, "invalid resource type");
+    return ret;
+  }
+  if (data.startswith("variant")) {
+    Type ret = ParseVariantType(parser);
+    if (!ret) parser.emitError(loc, "invalid variant type");
+    return ret;
+  }
+  return (parser.emitError(loc, "unknown TensorFlow type: " + data), nullptr);
 }
 
 // Prints a type registered to this dialect.
@@ -391,8 +402,7 @@ void TensorFlowDialect::printType(Type ty, DialectAsmPrinter &os) const {
 
 namespace {
 template <typename TypeWithSubtype>
-Type ParseTypeWithSubtype(MLIRContext *context, DialectAsmParser &parser,
-                          Location loc) {
+Type ParseTypeWithSubtype(MLIRContext *context, DialectAsmParser &parser) {
   // Default type without inferred subtypes.
   if (failed(parser.parseOptionalLess())) return TypeWithSubtype::get(context);
 
@@ -401,11 +411,19 @@ Type ParseTypeWithSubtype(MLIRContext *context, DialectAsmParser &parser,
   do {
     TensorType tensor_ty;
     if (parser.parseType(tensor_ty)) return Type();
+
+    // Each of the subtypes should be a valid TensorFlow type.
+    // TODO(jpienaar): Remove duplication.
+    if (!IsValidTFTensorType(tensor_ty)) {
+      parser.emitError(parser.getNameLoc()) << "invalid subtype: " << tensor_ty;
+      return Type();
+    }
     subtypes.push_back(tensor_ty);
   } while (succeeded(parser.parseOptionalComma()));
 
   if (parser.parseGreater()) return Type();
-  return TypeWithSubtype::getChecked(subtypes, context, loc);
+
+  return TypeWithSubtype::get(subtypes, context);
 }
 
 template <typename TypeWithSubtype>
@@ -421,9 +439,8 @@ void PrintTypeWithSubtype(StringRef type, TypeWithSubtype ty,
 }
 }  // anonymous namespace
 
-Type TensorFlowDialect::ParseResourceType(DialectAsmParser &parser,
-                                          Location loc) const {
-  return ParseTypeWithSubtype<ResourceType>(getContext(), parser, loc);
+Type TensorFlowDialect::ParseResourceType(DialectAsmParser &parser) const {
+  return ParseTypeWithSubtype<ResourceType>(getContext(), parser);
 }
 
 void TensorFlowDialect::PrintResourceType(ResourceType ty,
@@ -431,9 +448,8 @@ void TensorFlowDialect::PrintResourceType(ResourceType ty,
   return PrintTypeWithSubtype("resource", ty, os);
 }
 
-Type TensorFlowDialect::ParseVariantType(DialectAsmParser &parser,
-                                         Location loc) const {
-  return ParseTypeWithSubtype<VariantType>(getContext(), parser, loc);
+Type TensorFlowDialect::ParseVariantType(DialectAsmParser &parser) const {
+  return ParseTypeWithSubtype<VariantType>(getContext(), parser);
 }
 
 void TensorFlowDialect::PrintVariantType(VariantType ty,

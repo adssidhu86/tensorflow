@@ -41,9 +41,9 @@ if [ ! -d ${DOWNLOADS_DIR} ]; then
 fi
 
 if [[ ${2} == "hifi4" ]]; then
-  LIBRARY_URL="http://github.com/foss-xtensa/nnlib-hifi4/raw/master/archive/xa_nnlib_hifi4_12_22.zip"
+  LIBRARY_URL="http://github.com/foss-xtensa/nnlib-hifi4/raw/master/archive/xa_nnlib_hifi4_02_11_2021.zip"
   LIBRARY_DIRNAME="xa_nnlib_hifi4"
-  LIBRARY_MD5="bb4aa8bd589ee1b4b9fd71349a1e7317"
+  LIBRARY_MD5="8b934f61ffe0a966644849602810fb1b"
 else
   echo "Attempting to download an unsupported xtensa variant: ${2}"
   exit 1
@@ -65,6 +65,16 @@ else
   fi
 
   unzip -qo /tmp/${TMP_ZIP_ARCHIVE_NAME} -d ${DOWNLOADS_DIR} >&2
+  # TODO(b/183232978): remove these checks when xa_nnlib is updated.
+  sed -i '/XA_NNLIB_ARG_CHK_COND((y_stride > kernel_height), -1);/d' \
+    ${DOWNLOADS_DIR}/xa_nnlib_hifi4/algo/kernels/cnn/hifi4/*.c
+  sed -i '/XA_NNLIB_ARG_CHK_COND((x_stride > kernel_width), -1);/d' \
+    ${DOWNLOADS_DIR}/xa_nnlib_hifi4/algo/kernels/cnn/hifi4/*.c
+  sed -i '/XA_NNLIB_CHK_COND((x_stride <= 0 || x_stride > kernel_width), -1);/d' \
+    ${DOWNLOADS_DIR}/xa_nnlib_hifi4/algo/kernels/cnn/hifi4/*.c
+  sed -i '/XA_NNLIB_CHK_COND((y_stride <= 0 || y_stride > kernel_width), -1);/d' \
+    ${DOWNLOADS_DIR}/xa_nnlib_hifi4/algo/kernels/cnn/hifi4/*.c
+
 fi
 
 echo "SUCCESS"

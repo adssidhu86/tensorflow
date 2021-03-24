@@ -85,6 +85,7 @@ cc_library(
         "@llvm-project//llvm:Support",
         "@llvm-project//llvm:Target",
         "@llvm-project//llvm:TransformUtils",
+        "@llvm-project//mlir:IR",
     ],
 )
 
@@ -94,6 +95,7 @@ cc_library(
     hdrs = ["ir_array.h"],
     deps = [
         ":llvm_util",
+        "//tensorflow/compiler/xla:permutation_util",
         "//tensorflow/compiler/xla:shape_util",
         "//tensorflow/compiler/xla:statusor",
         "//tensorflow/compiler/xla:types",

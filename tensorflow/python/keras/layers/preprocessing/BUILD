@@ -5,7 +5,6 @@ load("//tensorflow:tensorflow.bzl", "tf_py_test")
 
 # buildifier: disable=same-origin-load
 load("//tensorflow:tensorflow.bzl", "cuda_py_test")
-load("//tensorflow/python/tpu:tpu.bzl", "tpu_py_test")
 load("//tensorflow/core/platform/default:distribute.bzl", "distribute_py_test")
 
 package(
@@ -47,7 +46,6 @@ py_library(
     name = "discretization",
     srcs = [
         "discretization.py",
-        "discretization_v1.py",
     ],
     srcs_version = "PY3",
     deps = [
@@ -148,7 +146,6 @@ py_library(
     name = "index_lookup",
     srcs = [
         "index_lookup.py",
-        "index_lookup_v1.py",
     ],
     srcs_version = "PY3",
     deps = [
@@ -160,6 +157,7 @@ py_library(
         "//tensorflow/python:tensor_shape",
         "//tensorflow/python:tensor_spec",
         "//tensorflow/python:util",
+        "//tensorflow/python/keras:backend",
         "//tensorflow/python/keras/engine",
         "//third_party/py/numpy",
     ],
@@ -169,7 +167,6 @@ py_library(
     name = "normalization",
     srcs = [
         "normalization.py",
-        "normalization_v1.py",
     ],
     srcs_version = "PY3",
     deps = [
@@ -191,7 +188,6 @@ py_library(
     name = "integer_lookup",
     srcs = [
         "integer_lookup.py",
-        "integer_lookup_v1.py",
     ],
     srcs_version = "PY3",
     deps = [
@@ -229,7 +225,6 @@ py_library(
     name = "text_vectorization",
     srcs = [
         "text_vectorization.py",
-        "text_vectorization_v1.py",
     ],
     srcs_version = "PY3",
     deps = [
@@ -258,7 +253,6 @@ py_library(
     name = "category_encoding",
     srcs = [
         "category_encoding.py",
-        "category_encoding_v1.py",
     ],
     srcs_version = "PY3",
     deps = [
@@ -301,7 +295,6 @@ py_library(
     name = "string_lookup",
     srcs = [
         "string_lookup.py",
-        "string_lookup_v1.py",
     ],
     srcs_version = "PY3",
     deps = [
@@ -517,13 +510,15 @@ cuda_py_test(
     ],
 )
 
-tpu_py_test(
+distribute_py_test(
     name = "hashing_distribution_test",
     srcs = ["hashing_distribution_test.py"],
     disable_mlir_bridge = False,
     main = "hashing_distribution_test.py",
     python_version = "PY3",
-    tags = ["multi_and_single_gpu"],
+    tags = [
+        "multi_and_single_gpu",
+    ],
     deps = [
         ":hashing",
         "//tensorflow/python/distribute:combinations",
@@ -548,13 +543,16 @@ tf_py_test(
     ],
 )
 
-tpu_py_test(
+distribute_py_test(
     name = "index_lookup_distribution_test",
     srcs = ["index_lookup_distribution_test.py"],
     disable_mlir_bridge = False,
     main = "index_lookup_distribution_test.py",
     python_version = "PY3",
-    tags = ["no_oss"],
+    tags = [
+        "multi_and_single_gpu",
+    ],
+    tpu_tags = ["no_oss"],
     deps = [
         ":index_lookup",
         "//tensorflow/python/distribute:combinations",

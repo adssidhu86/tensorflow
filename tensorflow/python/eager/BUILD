@@ -1,3 +1,4 @@
+load("//tensorflow:tensorflow.bzl", "check_deps")
 load("//tensorflow:tensorflow.bzl", "cuda_py_test")
 
 # buildifier: disable=same-origin-load
@@ -60,11 +61,12 @@ cc_library(
         "//tensorflow/core/platform:logging",
         "//tensorflow/core/platform:types",
         "//tensorflow/core/profiler/lib:traceme",
-        "//tensorflow/core/util:abstract_stack_trace",
+        "//tensorflow/core/util:managed_stack_trace",
         "//tensorflow/python:ndarray_tensor",
         "//tensorflow/python:ndarray_tensor_bridge",
         "//tensorflow/python:numpy_lib",
         "//tensorflow/python:py_exception_registry",
+        "//tensorflow/python:pybind11_status",
         "//tensorflow/python/lib/core:py_seq_tensor",
         "//tensorflow/python/lib/core:py_util",
         "//tensorflow/python/lib/core:safe_ptr",
@@ -510,6 +512,7 @@ cuda_py_test(
         "//tensorflow/python:init_ops",
         "//tensorflow/python:layers",
         "//tensorflow/python:list_ops",
+        "//tensorflow/python:logging_ops",
         "//tensorflow/python:math_ops",
         "//tensorflow/python:random_seed",
         "//tensorflow/python:resource_variable_ops",
@@ -818,6 +821,15 @@ py_library(
     ],
 )
 
+# Check that the main TensorFlow python library depends on and links XLA.
+check_deps(
+    name = "def_function_check_deps",
+    required_deps = [
+        "//tensorflow/compiler/jit:xla_kernel_creator",
+    ],
+    deps = [":def_function"],
+)
+
 py_library(
     name = "def_function",
     srcs = ["def_function.py"],
@@ -1035,6 +1047,7 @@ cuda_py_test(
         "//tensorflow/python:functional_ops",
         "//tensorflow/python:resource_variable_ops",
         "//tensorflow/python:tensor_spec",
+        "//tensorflow/python:test_ops",
         "@absl_py//absl/testing:parameterized",
         "@six_archive//:six",
     ],

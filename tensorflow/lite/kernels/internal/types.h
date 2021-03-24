@@ -184,7 +184,11 @@ class RuntimeShape {
   // rolls out.
   RuntimeShape(RuntimeShape const& other) : size_(other.DimensionsCount()) {
     if (size_ > kMaxSmallSize) {
+#ifdef TF_LITE_STATIC_MEMORY
+      TFLITE_CHECK(false && "No shape resizing supported on this platform");
+#else
       dims_pointer_ = new int32_t[size_];
+#endif
     }
     std::memcpy(DimsData(), other.DimsData(), sizeof(int32_t) * size_);
   }
@@ -948,6 +952,7 @@ struct FullyConnectedParams {
 
 struct GatherParams {
   int16_t axis;
+  int16_t batch_dims;
 };
 
 struct L2NormalizationParams {

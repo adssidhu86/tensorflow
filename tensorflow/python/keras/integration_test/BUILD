@@ -17,7 +17,7 @@ tf_py_test(
     srcs = ["forwardprop_test.py"],
     python_version = "PY3",
     deps = [
-        "//tensorflow:tensorflow_py",
+        "//tensorflow:tensorflow_py_no_contrib",
         "@absl_py//absl/testing:parameterized",
     ],
 )
@@ -27,7 +27,7 @@ tf_py_test(
     srcs = ["function_test.py"],
     python_version = "PY3",
     deps = [
-        "//tensorflow:tensorflow_py",
+        "//tensorflow:tensorflow_py_no_contrib",
     ],
 )
 
@@ -36,7 +36,7 @@ tf_py_test(
     srcs = ["gradients_test.py"],
     python_version = "PY3",
     deps = [
-        "//tensorflow:tensorflow_py",
+        "//tensorflow:tensorflow_py_no_contrib",
     ],
 )
 
@@ -45,7 +45,7 @@ cuda_py_test(
     srcs = ["saved_model_test.py"],
     python_version = "PY3",
     deps = [
-        "//tensorflow:tensorflow_py",
+        "//tensorflow:tensorflow_py_no_contrib",
         "@absl_py//absl/testing:parameterized",
     ],
 )
@@ -55,7 +55,7 @@ tf_py_test(
     srcs = ["legacy_rnn_test.py"],
     python_version = "PY3",
     deps = [
-        "//tensorflow:tensorflow_py",
+        "//tensorflow:tensorflow_py_no_contrib",
     ],
 )
 
@@ -63,7 +63,7 @@ tf_py_test(
     name = "module_test",
     srcs = ["module_test.py"],
     deps = [
-        "//tensorflow:tensorflow_py",
+        "//tensorflow:tensorflow_py_no_contrib",
     ],
 )
 
@@ -72,7 +72,7 @@ tf_py_test(
     srcs = ["vectorized_map_test.py"],
     python_version = "PY3",
     deps = [
-        "//tensorflow:tensorflow_py",
+        "//tensorflow:tensorflow_py_no_contrib",
     ],
 )
 
@@ -81,7 +81,25 @@ cuda_py_test(
     srcs = ["gradient_checkpoint_test.py"],
     python_version = "PY3",
     deps = [
-        "//tensorflow:tensorflow_py",
+        "//tensorflow:tensorflow_py_no_contrib",
+    ],
+)
+
+cuda_py_test(
+    name = "central_storage_strategy_test",
+    srcs = ["central_storage_strategy_test.py"],
+    python_version = "PY3",
+    tags = [
+        "multi_and_single_gpu",
+        "no_tfrt",  # TODO(b/179839466): Reenable TFRT after the issue is resolved.
+        "no_windows_gpu",  # TODO(b/130551176)
+    ],
+    deps = [
+        "//tensorflow:tensorflow_py_no_contrib",
+        "//tensorflow/python/distribute:combinations",
+        "//tensorflow/python/distribute:strategy_combinations",
+        "//tensorflow/python/keras/utils:kpl_test_utils",
+        "@absl_py//absl/testing:parameterized",
     ],
 )
 
@@ -93,7 +111,7 @@ tpu_py_test(
     python_version = "PY3",
     tags = ["no_oss"],
     deps = [
-        "//tensorflow:tensorflow_py",
+        "//tensorflow:tensorflow_py_no_contrib",
         "@absl_py//absl/testing:parameterized",
     ],
 )
@@ -105,12 +123,14 @@ tf_py_test(
     shard_count = 3,
     tags = [
         "no_tfrt",  # TODO(b/171765113)
+        "no_windows",  # TODO(b/183102726)
         "noasan",  # TODO(b/156029134)
+        "nomac",  # TODO(b/182567880)
         "nomsan",  # TODO(b/156029134)
         "notsan",  # TODO(b/156029134)
     ],
     deps = [
-        "//tensorflow:tensorflow_py",
+        "//tensorflow:tensorflow_py_no_contrib",
         "@absl_py//absl/testing:parameterized",
     ],
 )

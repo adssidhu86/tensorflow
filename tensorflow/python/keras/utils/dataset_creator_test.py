@@ -14,9 +14,6 @@
 # ==============================================================================
 """Tests for dataset_creator."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 from tensorflow.python.compat import v2_compat
 from tensorflow.python.data.ops import dataset_ops
 from tensorflow.python.distribute import multi_worker_test_base
@@ -49,19 +46,7 @@ class DatasetCreatorTest(test.TestCase):
         next(iter(got)),
         next(iter(dataset_ops.DatasetV2.from_tensor_slices([1, 1]))))
 
-  def test_dataset_creator_usage_in_parameter_server_model_fit(self):
-    self.skipTest("TODO(rchao): Enable this test once training API changes for "
-                  "DatasetFactory is submitted.")
-    cluster_def = multi_worker_test_base.create_in_process_cluster(
-        num_workers=2, num_ps=1, rpc_layer="grpc")
-    cluster_def["chief"] = [
-        "localhost:%d" % multi_worker_test_base.pick_unused_port()
-    ]
-    strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
-        SimpleClusterResolver(ClusterSpec(cluster_def), rpc_layer="grpc"))
-    with strategy.scope():
-      model = sequential.Sequential([core_layers.Dense(10)])
-    model.compile(gradient_descent.SGD(), loss="mse")
+  def _get_dataset_fn(self):
 
     def dataset_fn(input_context):
       global_batch_size = 64
@@ -73,8 +58,33 @@ class DatasetCreatorTest(test.TestCase):
       dataset = dataset.prefetch(2)
       return dataset
 
+    return dataset_fn
+
+  def test_dataset_creator_model_fit_without_strategy(self):
+    model = sequential.Sequential([core_layers.Dense(10)])
+    model.compile(gradient_descent.SGD(), loss="mse")
+
     history = model.fit(
-        dataset_creator.DatasetCreator(dataset_fn),
+        dataset_creator.DatasetCreator(self._get_dataset_fn()),
+        epochs=10,
+        steps_per_epoch=10,
+        verbose=0)
+    self.assertLen(history.history["loss"], 10)
+
+  def test_dataset_creator_usage_in_parameter_server_model_fit(self):
+    cluster_def = multi_worker_test_base.create_in_process_cluster(
+        num_workers=2, num_ps=1, rpc_layer="grpc")
+    cluster_def["chief"] = [
+        "localhost:%d" % multi_worker_test_base.pick_unused_port()
+    ]
+    strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
+        SimpleClusterResolver(ClusterSpec(cluster_def), rpc_layer="grpc"))
+    with strategy.scope():
+      model = sequential.Sequential([core_layers.Dense(10)])
+    model.compile(gradient_descent.SGD(), loss="mse")
+
+    history = model.fit(
+        dataset_creator.DatasetCreator(self._get_dataset_fn()),
         epochs=10,
         steps_per_epoch=10,
         verbose=0)

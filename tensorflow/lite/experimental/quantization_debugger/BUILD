@@ -13,6 +13,7 @@ pytype_strict_library(
     srcs_version = "PY3",
     deps = [
         "//tensorflow:tensorflow_py",
+        "//tensorflow/lite/python:metrics",
         "//tensorflow/python/util:tf_export",
         "//third_party/py/numpy",
     ],
@@ -29,9 +30,11 @@ py_strict_test(
         "//tensorflow:tensorflow_py",
         "//tensorflow/lite/python:convert",
         "//tensorflow/lite/python:lite",
+        "//tensorflow/lite/python:metrics",
         "//tensorflow/python:framework_test_lib",
         "//tensorflow/python/platform:client_testlib",
         "//tensorflow/python/training/tracking",
         "//third_party/py/numpy",
+        "@absl_py//absl/testing:parameterized",
     ],
 )

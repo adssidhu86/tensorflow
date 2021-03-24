@@ -39,7 +39,6 @@ load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
 load(
     "//third_party/mkl:build_defs.bzl",
     "if_mkl",
-    "mkl_deps",
 )
 
 default_package_visibility = [
@@ -90,6 +89,7 @@ cc_library(
     deps = [
         ":core_cpu",
         "//tensorflow/core/common_runtime/gpu:gpu_runtime",
+        "//tensorflow/core/common_runtime/pluggable_device:pluggable_device_runtime",
     ] + if_libtpu(["//tensorflow/core/tpu:tpu_runtime"]),
 )
 
@@ -1030,7 +1030,7 @@ cc_library(
         ":bfc_allocator",
         ":pool_allocator",
         "//tensorflow/core:lib",
-    ] + mkl_deps(),
+    ],
 )
 
 cc_library(
@@ -1044,14 +1044,14 @@ cc_library(
     deps = [
         ":function",
         ":optimization_registry",
-        "@com_google_absl//absl/base",
         "//tensorflow/core:framework",
         "//tensorflow/core:framework_internal",
         "//tensorflow/core:graph",
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
         "//tensorflow/core:protos_all_cc",
-    ] + mkl_deps(),
+        "@com_google_absl//absl/base",
+    ],
     alwayslink = 1,
 )
 
@@ -1071,7 +1071,7 @@ cc_library(
         "//tensorflow/core:graph",
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
-    ] + mkl_deps(),
+    ],
     alwayslink = 1,
 )
 
@@ -1668,7 +1668,7 @@ tf_cuda_library(
         "//tensorflow/core/grappler/clusters:virtual_cluster",
         "//tensorflow/core/grappler/optimizers:meta_optimizer",
         "//third_party/eigen3",
-    ] + mkl_deps() + tf_additional_core_deps() + if_static([
+    ] + tf_additional_core_deps() + if_static([
         ":core_cpu_impl",
         "//tensorflow/core:function_ops_op_lib",
         "//tensorflow/core:functional_grad",
@@ -1697,7 +1697,6 @@ cc_library(
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
         "//tensorflow/core:protos_all_cc",
-        "//tensorflow/core/framework:allocator",
         "//tensorflow/core/profiler/lib:traceme",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/strings",
@@ -2717,5 +2716,17 @@ tf_cc_test(
         "//tensorflow/core/kernels:ops_util",
         "//tensorflow/core/util:protos_test_cc",
         "//third_party/eigen3",
+    ],
+)
+
+tf_cc_test(
+    name = "bfc_allocator_test",
+    srcs = ["bfc_allocator_test.cc"],
+    deps = [
+        ":bfc_allocator",
+        "//tensorflow/core:test",
+        "//tensorflow/core:test_main",
+        "//tensorflow/core/framework:allocator",
+        "//tensorflow/core/platform:test_benchmark",
     ],
 )

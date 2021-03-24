@@ -40,8 +40,10 @@ limitations under the License.
 #include "mlir/Pass/PassRegistry.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "mlir/Transforms/RegionUtils.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops_n_z.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/serialize_mlir_module_utils.h"
 #define DEBUG_TYPE "tf-tpu-merge-variables-with-execute"
@@ -77,6 +79,12 @@ constexpr char kFuncDeviceAttr[] = "tf.device";
 
 struct TPUMergeVariablesWithExecutePass
     : public PassWrapper<TPUMergeVariablesWithExecutePass, FunctionPass> {
+  void getDependentDialects(DialectRegistry& registry) const override {
+    // We need this here because at the moment we deserialize the TPUCompileMlir
+    // operation which contains annotation like `mhlo.sharding` attributes.
+    registry.insert<mhlo::MhloDialect>();
+  }
+
   void runOnFunction() override;
 };
 
@@ -135,16 +143,15 @@ VariableAccessesForTPUExecute BuildVariableAccessInfo(
   // consider resource accesses in other islands since they ordering is enforced
   // by inter-island dependencies.
   Operation* first_read = nullptr;
-  Operation& execute = execute_launch.GetBody().front();
+  auto execute = cast<TF::TPUExecuteOp>(execute_launch.GetBody().front());
   auto parallel_execute = llvm::dyn_cast<tf_device::ParallelExecuteOp>(
       execute_launch->getParentOp());
   Operation* execute_parent =
       parallel_execute ? parallel_execute.getOperation() : execute_launch;
   // Find inputs that are variable reads.
-  for (auto operand : llvm::enumerate(execute.getOpOperands())) {
+  for (auto operand : llvm::enumerate(execute->getOpOperands())) {
     infos.new_operand_values.push_back(operand.value().get());
-    if (!operand.value().get().getDefiningOp()) continue;
-    auto read_op = llvm::dyn_cast<TF::ReadVariableOp>(
+    auto read_op = llvm::dyn_cast_or_null<TF::ReadVariableOp>(
         operand.value().get().getDefiningOp());
     if (!read_op) continue;
     if (check_same_region &&
@@ -478,7 +485,7 @@ LogicalResult UpdateSerializedModule(tf_device::LaunchOp execute_launch,
   // Serialize the updated module back into the TPUCompileMlir op.
   auto module_string = tensorflow::SerializeMlirModule(module_ref.get());
   compile.mlir_moduleAttr(
-      mlir::StringAttr::get(module_string, module_ref->getContext()));
+      mlir::StringAttr::get(module_ref->getContext(), module_string));
   return success();
 }
 
@@ -527,11 +534,9 @@ LogicalResult MergeForOneTPUExecute(tf_device::LaunchOp execute_launch,
     Type type = it.value().getType();
     if (type.isa<TensorType>() &&
         type.cast<TensorType>().getElementType().isa<TF::ResourceType>()) {
-      if (llvm::find(device_var_reads_indices, it.index()) ==
-              device_var_reads_indices.end() &&
-          llvm::find(device_var_updates_indices, it.index()) ==
-              device_var_updates_indices.end()) {
-        return execute_launch.emitError("operand #")
+      if (!llvm::is_contained(device_var_reads_indices, it.index()) &&
+          !llvm::is_contained(device_var_updates_indices, it.index())) {
+        return execute_launch.GetBody().front().emitError("operand #")
                << it.index()
                << " is a resource that was neither read nor written to; this "
                   "resource potentially failed to be hoisted";

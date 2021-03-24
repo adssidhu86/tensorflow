@@ -84,10 +84,10 @@ struct ReifyReturnTypeShapesPattern : public RewritePattern {
 struct TestInferShapedTypeMethodsPass
     : public PassWrapper<TestInferShapedTypeMethodsPass, FunctionPass> {
   void runOnFunction() override {
-    OwningRewritePatternList patterns;
+    OwningRewritePatternList patterns(&getContext());
     patterns.insert<ReifyReturnTypeShapesPattern>(&getContext());
     patterns.insert<InferReturnTypeComponentsPattern>(&getContext());
-    applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+    (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
   }
 };
 

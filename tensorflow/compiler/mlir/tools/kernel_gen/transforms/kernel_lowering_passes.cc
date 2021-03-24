@@ -48,8 +48,10 @@ class GpuKernelToNVVMPass
   void runOnOperation() override {
     GPUModuleOp m = getOperation();
 
-    OwningRewritePatternList patterns;
-    LLVMTypeConverter converter(m.getContext());
+    RewritePatternSet patterns(&getContext());
+    mlir::LowerToLLVMOptions llvm_opts;
+    llvm_opts.indexBitwidth = 32;
+    LLVMTypeConverter converter(m.getContext(), llvm_opts);
     populateStdToLLVMConversionPatterns(converter, patterns);
     populateGpuToNVVMConversionPatterns(converter, patterns);
     populateComplexToLLVMConversionPatterns(converter, patterns);
@@ -73,7 +75,7 @@ class GpuKernelToROCDLPass
   void runOnOperation() override {
     gpu::GPUModuleOp m = getOperation();
 
-    OwningRewritePatternList patterns;
+    RewritePatternSet patterns(&getContext());
     LLVMTypeConverter converter(m.getContext());
     populateStdToLLVMConversionPatterns(converter, patterns);
     populateGpuToROCDLConversionPatterns(converter, patterns);

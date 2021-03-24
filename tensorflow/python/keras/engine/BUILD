@@ -58,6 +58,7 @@ py_library(
         "//tensorflow/python/distribute:parameter_server_strategy",
         "//tensorflow/python/distribute:parameter_server_strategy_v2",
         "//tensorflow/python/distribute:reduce_util",
+        "//tensorflow/python/distribute/coordinator:cluster_coordinator",
         "//tensorflow/python/eager:monitoring",
         "//tensorflow/python/keras:activations",
         "//tensorflow/python/keras:backend",
@@ -184,6 +185,7 @@ py_library(
         "//tensorflow/python:framework_ops",
         "//tensorflow/python:util",
         "//tensorflow/python/data/ops:dataset_ops",
+        "//tensorflow/python/keras/utils:dataset_creator",
         "//tensorflow/python/keras/utils:engine_utils",
         "//tensorflow/python/keras/utils:tf_utils",
     ],
@@ -220,7 +222,6 @@ py_library(
     name = "base_preprocessing_layer",
     srcs = [
         "base_preprocessing_layer.py",
-        "base_preprocessing_layer_v1.py",
     ],
     srcs_version = "PY3",
     deps = [
@@ -274,6 +275,7 @@ tf_py_test(
     shard_count = 4,
     tags = [
         "no_oss_py38",  # TODO(b/150615192)
+        "no_tfrt",  # TODO(b/179805675)
         "nomac",  # TODO(mihaimaruseac): b/127695564
     ],
     deps = [
@@ -451,6 +453,7 @@ tf_py_test(
     python_version = "PY3",
     shard_count = 4,
     tags = [
+        "no_tfrt",  # TODO(b/179459136)
         "nomac",  # TODO(mihaimaruseac): b/127695564
     ],
     deps = [

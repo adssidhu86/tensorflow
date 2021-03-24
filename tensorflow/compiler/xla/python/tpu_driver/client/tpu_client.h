@@ -65,11 +65,11 @@ class TpuDevice : public PjRtDevice {
 
   absl::string_view device_kind() const override { return device_kind_; }
 
-  Status TransferToInfeed(const LiteralSlice& literal) const override {
+  Status TransferToInfeed(const LiteralSlice& literal) override {
     return Unimplemented("Infeed not yet implemented via this API");
   }
 
-  Status TransferFromOutfeed(MutableBorrowingLiteral literal) const override {
+  Status TransferFromOutfeed(MutableBorrowingLiteral literal) override {
     return Unimplemented("Outfeed not yet implemented via this API");
   }
 
@@ -116,7 +116,8 @@ class PyTpuClient {
     return id_to_device_;
   }
   int task_id() const { return task_id_; }
-  const std::string& platform_name() const { return platform_name_; }
+  const absl::string_view platform_name() const { return platform_name_; }
+  const absl::string_view platform_version() const { return "<unknown>"; }
 
   StatusOr<Shape> ChooseCompactLayoutForShape(Shape subshape) {
     return Unimplemented("ChooseCompactLayoutForShape not implemented.");
@@ -207,7 +208,9 @@ class PyTpuBuffer {
 
   const Shape& on_host_shape() const { return on_host_shape_; }
   std::shared_ptr<PjRtDevice> device() const { return device_; }
-  const std::string& platform_name() const { return client_->platform_name(); }
+  const absl::string_view platform_name() const {
+    return client_->platform_name();
+  }
   std::shared_ptr<PyTpuClient> client() const { return client_; }
 
   // Returns the buffer's value as a tuple DAG of Python arrays. If the value
@@ -344,6 +347,10 @@ class PyTpuExecutable {
   StatusOr<std::vector<std::vector<std::unique_ptr<PyTpuBuffer>>>>
   ExecuteOnLocalDevices(
       absl::Span<const std::vector<PyTpuBuffer*>> argument_handles);
+
+  StatusOr<std::vector<std::vector<std::unique_ptr<PyTpuBuffer>>>>
+  ExecuteShardedOnLocalDevices(
+      absl::Span<const std::vector<PyTpuBuffer*>> args);
 
   void Delete() { executables_.clear(); }
 

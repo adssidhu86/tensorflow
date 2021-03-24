@@ -18,6 +18,12 @@ filegroup(
     ],
 )
 
+config_setting(
+    name = "no_keras_py_deps",
+    define_values = {"no_keras_py_deps": "true"},
+    visibility = ["//visibility:public"],
+)
+
 py_library(
     name = "keras",
     srcs = [
@@ -154,6 +160,7 @@ py_library(
     srcs_version = "PY3",
     deps = [
         ":backend",
+        "//tensorflow/python:errors",
         "//tensorflow/python/keras/distribute:distributed_file_utils",
         "//tensorflow/python/keras/distribute:worker_training_state",
         "//tensorflow/python/keras/protobuf:projector_config_proto_py",
@@ -186,6 +193,7 @@ py_library(
     srcs_version = "PY3",
     deps = [
         ":backend",
+        "//tensorflow/python:errors",
         "//tensorflow/python/keras/utils:engine_utils",
         "//tensorflow/python/profiler:profiler_v2",
     ],
@@ -566,10 +574,12 @@ tf_py_test(
     shard_count = 6,
     tags = [
         "no_oss",
+        "no_tfrt",  # TODO(b/179690526)
         "notsan",
     ],
     deps = [
         ":keras",
+        "//tensorflow/python/profiler:profiler_v2",
         "//third_party/py/numpy",
         "@absl_py//absl/testing:parameterized",
         "@six_archive//:six",

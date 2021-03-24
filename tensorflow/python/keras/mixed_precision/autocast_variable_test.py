@@ -13,9 +13,6 @@
 # limitations under the License.
 # ==============================================================================
 """Tests for AutoCastVariable."""
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 import os
 import threading
@@ -368,9 +365,7 @@ class AutoCastVariableTest(test.TestCase, parameterized.TestCase):
       # mode. Variable.assign(...).op is None in Eager mode and an op in Graph
       # mode or a tf.function. We test this is also true of AutoCastVariable.
       if context.executing_eagerly():
-        with self.assertRaisesRegex(
-            AttributeError,
-            'Tensor.op is meaningless when eager execution is enabled'):
+        with self.assertRaises(AttributeError):
           x.op  # pylint: disable=pointless-statement
         self.assertIsNone(x.assign(1.0).op)
         self.assertIsNone(x.assign_add(1.0).op)

@@ -22,6 +22,7 @@ import copy
 import functools
 import itertools
 import multiprocessing.pool
+import os
 import sys
 import time
 import weakref
@@ -70,6 +71,7 @@ from tensorflow.python.ops import gen_sendrecv_ops
 from tensorflow.python.ops import gradients_impl
 from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import list_ops
+from tensorflow.python.ops import logging_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import random_ops
 from tensorflow.python.ops import resource_variable_ops
@@ -80,6 +82,8 @@ from tensorflow.python.ops.ragged import ragged_factory_ops
 from tensorflow.python.ops.ragged import ragged_tensor
 from tensorflow.python.ops.structured import structured_tensor
 from tensorflow.python.platform import test
+from tensorflow.python.saved_model.load import load
+from tensorflow.python.saved_model.save import save
 from tensorflow.python.training import training_ops
 from tensorflow.python.util import compat
 from tensorflow.python.util import nest
@@ -1794,6 +1798,18 @@ class FunctionTest(test.TestCase, parameterized.TestCase):
     self.assertIn('CPU', has_device.v.device)
 
   @test_util.run_in_graph_and_eager_modes
+  def testMultipleDeviceCheck(self):
+
+    def f():
+      with ops.device('cpu'):
+        return test_ops.device_placement_op()
+
+    func = function.defun(f)
+    with ops.device('cpu:0'):
+      output = self.evaluate(func())
+      self.assertIn(compat.as_bytes('CPU:0'), output)
+
+  @test_util.run_in_graph_and_eager_modes
   def testDeviceAnnotationsRespected(self):
 
     def multi_device_fn():
@@ -3448,7 +3464,8 @@ class FunctionTest(test.TestCase, parameterized.TestCase):
 
   def testAddFunctionCallback(self):
     functions = []
-    def function_callback(f):
+    def function_callback(f, name, graph, inputs, outputs):
+      del name, graph, inputs, outputs
       functions.append(f)
 
     @def_function.function
@@ -3471,13 +3488,41 @@ class FunctionTest(test.TestCase, parameterized.TestCase):
     finally:
       function.clear_function_callbacks()
 
+  def testFunctionCallbackAddOps(self):
+    file_name = os.path.join(self.get_temp_dir(), 'test')
+
+    def function_callback(f, name, graph, inputs, outputs):
+      del f, name, inputs
+
+      with graph.as_default():
+        printer = logging_ops.print_v2(
+            'hello',
+            output_stream='file://' + file_name
+        )
+        outputs[0].op._add_control_input(printer)
+
+    @def_function.function
+    def plus_one(x):
+      return x + 1
+
+    self.addCleanup(function.clear_function_callbacks)
+    function.add_function_callback(function_callback)
+    x_float32 = numpy.array(3.0, dtype=numpy.float32)
+
+    self.assertAllClose(plus_one(x_float32), 4.0)
+
+    with open(file_name, 'r') as f:
+      self.assertEqual(f.read().strip(), 'hello')
+
   def testRemoveFunctionCallback(self):
     functions_1 = []
-    def function_callback_1(f):
+    def function_callback_1(f, name, graph, inputs, outputs):
+      del name, graph, inputs, outputs
       functions_1.append(f)
 
     functions_2 = []
-    def function_callback_2(f):
+    def function_callback_2(f, name, graph, inputs, outputs):
+      del name, graph, inputs, outputs
       functions_2.append(f)
 
     @def_function.function
@@ -3977,6 +4022,31 @@ class FunctionTest(test.TestCase, parameterized.TestCase):
         '    a: float32 Tensor, shape=<unknown>\n'
         '  Returns:\n'
         '    float32 Tensor, shape=<unknown>')
+
+  def testPrettyPrintedSignatureLoadedNamedTuple(self):
+    Point = collections.namedtuple('Point', ['x', 'y'])
+
+    @def_function.function
+    def fn(b, a):  # pylint: disable=unused-argument
+      return 1.
+
+    b = Point(
+        x=constant_op.constant(1., dtype=dtypes.float32),
+        y=constant_op.constant(1., dtype=dtypes.float32))
+    a = Point(
+        x=constant_op.constant(1, dtype=dtypes.int32),
+        y=constant_op.constant(1, dtype=dtypes.int32))
+
+    mod = module.Module()
+    f = fn.get_concrete_function(b, a)
+    save(mod, '/tmp/f', signatures=f)
+    loaded = load('/tmp/f')
+
+    printed = loaded.signatures['serving_default'].pretty_printed_signature()
+    self.assertIn('a: int32 Tensor, shape=()', printed)
+    self.assertIn('a_1: int32 Tensor, shape=()', printed)
+    self.assertIn('b: float32 Tensor, shape=()', printed)
+    self.assertIn('b_1: float32 Tensor, shape=()', printed)
 
   @test_util.run_in_graph_and_eager_modes
   def testIndexedSlicesAsGradientsForConcreteFunctions(self):

@@ -28,6 +28,7 @@ PYBIND11_MODULE(tpu_client_extension, m) {
   py::class_<PyTpuClient, std::shared_ptr<PyTpuClient>>(m, "TpuClient")
       .def_static("Get", &PyTpuClient::Get, py::arg("worker"))
       .def_property_readonly("platform", &PyTpuClient::platform_name)
+      .def_property_readonly("platform_version", &PyTpuClient::platform_version)
       .def("device_count", &PyTpuClient::device_count)
       .def("local_device_count", &PyTpuClient::local_device_count)
       .def("devices", &PyTpuClient::devices)
@@ -196,6 +197,9 @@ PYBIND11_MODULE(tpu_client_extension, m) {
       .def("execute", &PyTpuExecutable::Execute,
            py::call_guard<py::gil_scoped_release>(), py::arg("arguments"))
       .def("execute_on_local_devices", &PyTpuExecutable::ExecuteOnLocalDevices,
+           py::call_guard<py::gil_scoped_release>(), py::arg("arguments"))
+      .def("execute_sharded_on_local_devices",
+           &PyTpuExecutable::ExecuteShardedOnLocalDevices,
            py::call_guard<py::gil_scoped_release>(), py::arg("arguments"))
       // TODO(phawkins): implement traceback support.
       .def_property_readonly("traceback",

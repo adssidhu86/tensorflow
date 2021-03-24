@@ -37,6 +37,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/xla_data.pb.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/casts.h"
+#include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/platform/fingerprint.h"
 #include "tensorflow/core/platform/thread_annotations.h"
 #include "tensorflow/core/platform/types.h"
@@ -91,10 +92,10 @@ class PjRtDevice {
   virtual std::string DebugString() const = 0;
 
   // Transfer the given literal to the infeed queue.
-  virtual Status TransferToInfeed(const LiteralSlice& literal) const = 0;
+  virtual Status TransferToInfeed(const LiteralSlice& literal) = 0;
 
   // Transfer and return a value of the given shape from the outfeed queue.
-  virtual Status TransferFromOutfeed(MutableBorrowingLiteral literal) const = 0;
+  virtual Status TransferFromOutfeed(MutableBorrowingLiteral literal) = 0;
 };
 
 // Forward declaration.
@@ -173,6 +174,8 @@ class PjRtClient {
   // Returns a string that identifies the platform (CPU/GPU/TPU).
   virtual absl::string_view platform_name() const = 0;
 
+  virtual absl::string_view platform_version() const = 0;
+
   // Return a device-specific default device assignment, e.g., GPU and TPU may
   // be different.
   virtual StatusOr<DeviceAssignment> GetDefaultDeviceAssignment(
@@ -245,6 +248,10 @@ class PjRtClient {
       void* device_ptr, const Shape& shape, PjRtDevice* device,
       std::function<void()> on_delete_callback) = 0;
 
+  // Returns platform-dependent address for the given buffer that is often but
+  // not guaranteed to be the physical/device address.
+  virtual StatusOr<std::uintptr_t> UnsafeBufferPointer(PjRtBuffer* buffer);
+
   // Asynchronously makes a vector of PjRtBuffers that can be used to receive
   // cross host transfers using `client` on `device'. `shapes` must be the exact
   // shapes, with identical layouts, corresponding to the buffers that will be
@@ -262,6 +269,11 @@ class PjRtClient {
   virtual StatusOr<ChannelHandle> CreateChannelHandle() = 0;
   virtual StatusOr<ChannelHandle> CreateDeviceToHostChannelHandle() = 0;
   virtual StatusOr<ChannelHandle> CreateHostToDeviceChannelHandle() = 0;
+
+  // TODO(zhangqiaorjc): Experimental API to be removed.
+  // Defragment device memory.
+  virtual Status Defragment(absl::Span<PjRtBuffer* const> buffers,
+                            absl::Span<PjRtExecutable* const> executables) = 0;
 };
 
 // Holds a reference from Python to a tuple of device buffers. A PjRtBuffer
@@ -276,25 +288,38 @@ class PjRtBuffer {
   virtual ~PjRtBuffer() = default;
 
   virtual const Shape& on_device_shape() const = 0;
+
+  // Same as on_device_shape when the shape is static. When the shape is
+  // dynamic, it gathers the metadata from the device and returns a static shape
+  // representing the logical shape of the data. This approach is identical to
+  // how tensorflow and xrt setup the output buffer in the graph.
+  //
+  // Since this method actually acquires locks and communicate with the device,
+  // it does not have the const qualifier, similar to what ToLiteral does.
+  virtual StatusOr<Shape> logical_on_device_shape() = 0;
   virtual PjRtDevice* device() const = 0;
   virtual PjRtClient* client() const = 0;
 
   // Returns the size of the on-device representation of this buffer in bytes.
   virtual int64 OnDeviceSizeInBytes() const = 0;
 
-  // ExternalReferenceHold is a potentially long-lived hold while the buffer is
-  // being shared by an external framework, e.g., NumPy. A client acquires an
-  // external hold by calling PjRtBuffer::AcquireExternalReference() and
-  // releases it by deleting the ExternalReferenceHold. The external framework
+  // ExternalReference is a potentially long-lived reference held while a buffer
+  // is being shared by an external framework, e.g., NumPy. A client acquires an
+  // external reference by calling PjRtBuffer::AcquireExternalReference() and
+  // releases it by deleting the ExternalReference. The external framework
   // should not modify the underlying buffer unless it is confident via its own
   // synchronization that modifications do not race with reads from the
   // PjRtBuffer.
-  struct ExternalReferenceHold {
-    virtual ~ExternalReferenceHold() = default;
+  class ExternalReference {
+   public:
+    virtual ~ExternalReference() = 0;
     // Return opaque device memory pointer to root buffer.
-    virtual void* OpaqueDeviceMemoryDataPointer() const = 0;
+    void* OpaqueDeviceMemoryDataPointer() const { return data_ptr_; }
+
+   protected:
+    void* data_ptr_;
   };
-  virtual StatusOr<std::unique_ptr<ExternalReferenceHold>>
+  virtual StatusOr<std::unique_ptr<ExternalReference>>
   AcquireExternalReference() = 0;
 
   // Copies the buffer's value into `literal`. Calls `on_ready` when the value
@@ -337,9 +362,9 @@ class PjRtBuffer {
 
   // Similar to Delete, drops the buffer's reference to its associated device
   // memory, leaving the buffer in an invalid state, but transfers the device
-  // memory ownership out via absl::optional<std::shared_ptr<void>> rather than
+  // memory ownership out via an ExternalReference rather than
   // freeing the device memory, so that another framework can take ownership of
-  // it. A return value of absl::nullopt indicates that PjRtBuffer has been
+  // it. A return value of nullptr indicates that PjRtBuffer has been
   // deleted. The buffer returned from Release may be safely dropped at any time
   // even if it still has pending async operations. The client should call
   // BlockHostUntilReady before calling ReleaseDeviceMemoryOwnership with
@@ -351,7 +376,7 @@ class PjRtBuffer {
   // If the buffer was shared via an external reference it is the client's
   // responsibility that accesses via that reference do not interfere with
   // accesses via the buffer returned from ReleaseDeviceMemoryOwnership.
-  virtual StatusOr<absl::optional<std::shared_ptr<void>>>
+  virtual StatusOr<std::unique_ptr<ExternalReference>>
   ReleaseDeviceMemoryOwnership(bool wait_for_operations_to_complete) = 0;
 
   // True if and only if Delete or Release has previously been called.
@@ -406,6 +431,9 @@ struct ExecuteOptions {
   // If non-null, an opaque context passed to an execution that may be used to
   // supply additional arguments to a derived class of PjRtExecutable.
   const ExecuteContext* context = nullptr;
+  // If true, check that the PjRtBuffer argument shapes match the compiled
+  // shapes. Otherwise, any shape with the right size on device may be passed.
+  bool strict_shape_checking = true;
 };
 
 // Represents a compiled computation that can be executed given handles to
@@ -453,6 +481,7 @@ class PjRtExecutable {
   // Executes on devices addressable by the client. Requires executable has a
   // device_assignment and all devices in the device_assignment are addressable
   // by the client.
+  // `argument_handles` is `[num_devices, num_args]`.
   virtual StatusOr<std::vector<std::vector<std::unique_ptr<PjRtBuffer>>>>
   Execute(absl::Span<const std::vector<PjRtBuffer*>> argument_handles,
           const ExecuteOptions& options) = 0;

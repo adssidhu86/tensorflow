@@ -62,9 +62,6 @@ def tflite_copts_warnings():
         ],
         "//conditions:default": [
             "-Wall",
-            # TensorFlow is C++14 at the moment. This flag ensures that we warn
-            # on any code that isn't C++14. Not supported by MSVC.
-            "-Wc++14-compat",
         ],
     })
 
@@ -85,6 +82,7 @@ def tflite_linkopts_unstripped():
     # negligible, and created potential compatibility problems.
     return select({
         clean_dep("//tensorflow:android"): [
+            "-latomic",  # Required for some uses of ISO C++11 <atomic> in x86.
             "-Wl,--no-export-dynamic",  # Only inc syms referenced by dynamic obj.
             "-Wl,--gc-sections",  # Eliminate unused code and data.
             "-Wl,--as-needed",  # Don't link unused libs.
@@ -106,6 +104,7 @@ def tflite_jni_linkopts_unstripped():
     # negligible, and created potential compatibility problems.
     return select({
         clean_dep("//tensorflow:android"): [
+            "-latomic",  # Required for some uses of ISO C++11 <atomic> in x86.
             "-Wl,--gc-sections",  # Eliminate unused code and data.
             "-Wl,--as-needed",  # Don't link unused libs.
         ],
@@ -115,12 +114,8 @@ def tflite_jni_linkopts_unstripped():
 def tflite_symbol_opts():
     """Defines linker flags whether to include symbols or not."""
     return select({
-        clean_dep("//tensorflow:android"): [
-            "-latomic",  # Required for some uses of ISO C++11 <atomic> in x86.
-        ],
-        "//conditions:default": [],
-    }) + select({
         clean_dep("//tensorflow:debug"): [],
+        clean_dep("//tensorflow/lite:tflite_keep_symbols"): [],
         "//conditions:default": [
             "-s",  # Omit symbol table, for all non debug builds
         ],
@@ -289,7 +284,7 @@ def json_to_tflite(name, src, out):
 
 # This is the master list of generated examples that will be made into tests. A
 # function called make_XXX_tests() must also appear in generate_examples.py.
-# Disable a test by adding it to the blacklists specified in
+# Disable a test by adding it to the denylists specified in
 # generated_test_models_failing().
 def generated_test_models():
     return [
@@ -489,6 +484,11 @@ def common_test_tags_for_generated_models(conversion_mode, failing):
       tags for the failing generated model tests.
     """
     tags = []
+
+    # Forward-compat coverage testing is largely redundant, and contributes
+    # to coverage test bloat.
+    if conversion_mode == "forward-compat":
+        tags.append("nozapfhahn")
 
     if failing:
         return ["notap", "manual"]
