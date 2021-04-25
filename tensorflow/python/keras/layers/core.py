@@ -54,6 +54,7 @@ from tensorflow.python.ops import nn_ops
 from tensorflow.python.ops import sparse_ops
 from tensorflow.python.ops import standard_ops
 from tensorflow.python.ops import variable_scope
+from tensorflow.python.ops.ragged import ragged_getitem
 from tensorflow.python.ops.ragged import ragged_tensor
 from tensorflow.python.platform import tf_logging
 from tensorflow.python.training.tracking import base as trackable
@@ -965,7 +966,7 @@ class Lambda(Layer):
   def _warn(self, msg):
     # This method will be overridden in a unit test to raise an error, because
     # self.assertWarns is not universally implemented.
-    return tf_logging.warn(msg)
+    return tf_logging.warning(msg)
 
   def compute_mask(self, inputs, mask=None):
     if callable(self.mask):
@@ -1441,7 +1442,7 @@ class TFOpLambda(Layer):
   def _warn(self, msg):
     # This method will be overridden in a unit test to raise an error, because
     # self.assertWarns is not universally implemented.
-    return tf_logging.warn(msg)
+    return tf_logging.warning(msg)
 
   def get_config(self):
     if not self.symbol:
@@ -1575,9 +1576,12 @@ class TFSlicingOpDispatcher(dispatch.OpDispatcher):
     else:
       return self.NOT_SUPPORTED
 
-for slicing_op in [array_ops._slice_helper,  # pylint: disable=protected-access
-                   array_ops.boolean_mask,
-                   array_ops.boolean_mask_v2]:
+for slicing_op in [
+    array_ops._slice_helper,  # pylint: disable=protected-access
+    array_ops.boolean_mask,
+    array_ops.boolean_mask_v2,
+    ragged_getitem.ragged_tensor_getitem
+]:
   TFSlicingOpDispatcher(slicing_op).register(slicing_op)
 
 
