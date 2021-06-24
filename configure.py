@@ -1330,8 +1330,8 @@ def main():
 
   with_xla_support = environ_cp.get('TF_ENABLE_XLA', None)
   if with_xla_support is not None:
-    write_to_bazelrc('build --define=with_xla_support=%s' % (
-        'true' if int(with_xla_support) else 'false'))
+    write_to_bazelrc('build --define=with_xla_support=%s' %
+                     ('true' if int(with_xla_support) else 'false'))
 
   set_action_env_var(
       environ_cp, 'TF_NEED_ROCM', 'ROCm', False, bazel_config_name='rocm')
@@ -1343,6 +1343,8 @@ def main():
 
   if (environ_cp.get('TF_NEED_ROCM') == '1' and environ_cp.get('ROCM_PATH')):
     write_action_env_to_bazelrc('ROCM_PATH', environ_cp.get('ROCM_PATH'))
+    write_action_env_to_bazelrc('ROCBLAS_TENSILE_LIBPATH',
+                                environ_cp.get('ROCM_PATH') + '/lib/library')
 
   environ_cp['TF_NEED_CUDA'] = str(
       int(get_var(environ_cp, 'TF_NEED_CUDA', 'CUDA', False)))
@@ -1464,12 +1466,10 @@ def main():
   config_info_line(
       'dynamic_kernels',
       '(Experimental) Build kernels into separate shared objects.')
-  config_info_line('v2', 'Build TensorFlow 2.x instead of 1.x.')
+  config_info_line('v1', 'Build with TensorFlow 1 API instead of TF 2 API.')
 
   print('Preconfigured Bazel build configs to DISABLE default on features:')
-  config_info_line('noaws', 'Disable AWS S3 filesystem support.')
   config_info_line('nogcp', 'Disable GCP support.')
-  config_info_line('nohdfs', 'Disable HDFS support.')
   config_info_line('nonccl', 'Disable NVIDIA NCCL support.')
 
 

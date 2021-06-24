@@ -95,6 +95,12 @@ class LhloDialectEmitter : public xla::ConstDfsHloVisitorWithDefault {
       const xla::HloInstruction* instr);
   xla::StatusOr<lmhlo::AllReduceOp> EmitAllReduceOp(
       const xla::HloInstruction* instr);
+  xla::StatusOr<lmhlo_gpu::AllReduceStartOp> EmitAllReduceStartOp(
+      const xla::HloInstruction* instr);
+  xla::StatusOr<lmhlo_gpu::AllReduceDoneOp> EmitAllReduceDoneOp(
+      const xla::HloInstruction* instr);
+  xla::StatusOr<lmhlo::AllReduceScatterOp> EmitAllReduceScatterOp(
+      const xla::HloInstruction* instr);
   xla::StatusOr<lmhlo::CollectivePermuteOp> EmitCollectivePermuteOp(
       const xla::HloInstruction* instr);
 
@@ -291,6 +297,10 @@ class LhloDialectEmitter : public xla::ConstDfsHloVisitorWithDefault {
 tensorflow::Status HloToLhloModule(const xla::BufferAssignment& assignment,
                                    const xla::HloModule& hlo_module,
                                    ModuleOp module);
+
+tensorflow::Status OptimizeAndConvertHloToLmhlo(
+    std::unique_ptr<xla::HloModule> hlo_module, ModuleOp module,
+    StringRef platform_name);
 
 OwningModuleRef HloTextToLhloTranslateFunction(llvm::StringRef input,
                                                MLIRContext* context);

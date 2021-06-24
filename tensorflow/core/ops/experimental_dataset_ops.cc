@@ -164,8 +164,7 @@ REGISTER_OP("CSVDataset")
     .Output("handle: variant")
     .Attr("output_types: list({float,double,int32,int64,string}) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // `filenames` must be a scalar or a vector.
@@ -207,8 +206,7 @@ REGISTER_OP("CSVDatasetV2")
     .Output("handle: variant")
     .Attr("output_types: list({float,double,int32,int64,string}) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // `filenames` must be a scalar or a vector.
@@ -252,8 +250,7 @@ REGISTER_OP("ExperimentalCSVDataset")
     .Output("handle: variant")
     .Attr("output_types: list({float,double,int32,int64,string}) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // `filenames` must be a scalar or a vector.
@@ -489,8 +486,7 @@ REGISTER_OP("LMDBDataset")
     .Output("handle: variant")
     .Attr("output_types: list(type) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn(shape_inference::ScalarShape);
 
 REGISTER_OP("ExperimentalLMDBDataset")
@@ -498,8 +494,7 @@ REGISTER_OP("ExperimentalLMDBDataset")
     .Output("handle: variant")
     .Attr("output_types: list(type) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn(shape_inference::ScalarShape);
 
 REGISTER_OP("MapAndBatchDataset")
@@ -571,8 +566,7 @@ REGISTER_OP("ExperimentalMapDataset")
 REGISTER_OP("MatchingFilesDataset")
     .Input("patterns: string")
     .Output("handle: variant")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // `patterns` must be a scalar or a vector.
@@ -583,8 +577,7 @@ REGISTER_OP("MatchingFilesDataset")
 REGISTER_OP("ExperimentalMatchingFilesDataset")
     .Input("patterns: string")
     .Output("handle: variant")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // `patterns` must be a scalar or a vector.
@@ -752,8 +745,7 @@ REGISTER_OP("ExperimentalRandomDataset")
     .Output("handle: variant")
     .Attr("output_types: list(type) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // buffer_size, seed, and seed2 should be scalars.
@@ -768,8 +760,7 @@ REGISTER_OP("RandomDataset")
     .Output("handle: variant")
     .Attr("output_types: list(type) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // buffer_size, seed, and seed2 should be scalars.
@@ -1015,6 +1006,31 @@ REGISTER_OP("LoadDataset")
       return shape_inference::ScalarShape(c);
     });
 
+REGISTER_OP("SnapshotDatasetReader")
+    .Input("shard_dir: string")
+    .Input("start_index: int64")
+    .Output("handle: variant")
+    .Attr("output_types: list(type) >= 1")
+    .Attr("output_shapes: list(shape) >= 1")
+    .Attr("compression: string = ''")
+    .Attr("version: int")
+    .SetShapeFn([](shape_inference::InferenceContext* c) {
+      shape_inference::ShapeHandle unused;
+      // `shard_dir` should be a scalar.
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(0), 0, &unused));
+      // `start_index` should be a scalar.
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(1), 0, &unused));
+      return shape_inference::ScalarShape(c);
+    });
+
+REGISTER_OP("SnapshotNestedDatasetReader")
+    .Input("inputs: N * variant")
+    .Output("handle: variant")
+    .Attr("output_types: list(type) >= 1")
+    .Attr("output_shapes: list(shape) >= 1")
+    .Attr("N: int >= 1")
+    .SetShapeFn(shape_inference::ScalarShape);
+
 REGISTER_OP("SqlDataset")
     .Input("driver_name: string")
     .Input("data_source_name: string")
@@ -1022,8 +1038,7 @@ REGISTER_OP("SqlDataset")
     .Output("handle: variant")
     .Attr("output_types: list(type) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // driver_name, data_source_name, and query should be scalars.
@@ -1040,8 +1055,7 @@ REGISTER_OP("ExperimentalSqlDataset")
     .Output("handle: variant")
     .Attr("output_types: list(type) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // driver_name, data_source_name, and query should be scalars.
@@ -1186,6 +1200,7 @@ REGISTER_OP("DataServiceDataset")
     .Attr("output_types: list(type) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
     .Attr("data_transfer_protocol: string = ''")
+    .Attr("target_workers: string = 'AUTO'")
     .SetIsStateful()
     .SetShapeFn(shape_inference::ScalarShape);
 
@@ -1206,6 +1221,7 @@ REGISTER_OP("DataServiceDatasetV2")
     .Attr("output_types: list(type) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
     .Attr("data_transfer_protocol: string = ''")
+    .Attr("target_workers: string = 'AUTO'")
     .SetIsStateful()
     .SetShapeFn(shape_inference::ScalarShape);
 

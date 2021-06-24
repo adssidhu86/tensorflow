@@ -127,11 +127,11 @@ def _tf_repositories():
     # and update the sha256 with the result.
     tf_http_archive(
         name = "XNNPACK",
-        sha256 = "5482fb0fcdc1df8b4842f8edf944443ea67ffe712a5cd846f0af484abe4f9a79",
-        strip_prefix = "XNNPACK-8f15372eb67ffab0d54cfe3752acaf8f8415af17",
+        sha256 = "7320355409ae5dd2c8600cafbd07b56c379cd13666a7c971ffd3a01025c0f63e",
+        strip_prefix = "XNNPACK-56b78a03e359ac04a3ba758596cd28b198a8000f",
         urls = [
-            "https://storage.googleapis.com/mirror.tensorflow.org/github.com/google/XNNPACK/archive/8f15372eb67ffab0d54cfe3752acaf8f8415af17.zip",
-            "https://github.com/google/XNNPACK/archive/8f15372eb67ffab0d54cfe3752acaf8f8415af17.zip",
+            "https://storage.googleapis.com/mirror.tensorflow.org/github.com/google/XNNPACK/archive/56b78a03e359ac04a3ba758596cd28b198a8000f.zip",
+            "https://github.com/google/XNNPACK/archive/56b78a03e359ac04a3ba758596cd28b198a8000f.zip",
         ],
     )
 
@@ -159,11 +159,11 @@ def _tf_repositories():
         name = "cudnn_frontend_archive",
         build_file = "//third_party:cudnn_frontend.BUILD",
         patch_file = "//third_party:cudnn_frontend_header_fix.patch",
-        sha256 = "498f908ced41bbf524af6b89dc4229d5cc89311bfaaed1e3794981e858629196",
-        strip_prefix = "cudnn-frontend-360d6e7164dfb7c802493fd1c0464f0d815b852a",
+        sha256 = "60b085e1412144e0b24f8b01809857d3a4491c9b2b1c58f0766f673b791d05ca",
+        strip_prefix = "cudnn-frontend-51e60d891b689d618e7a623509a779c422a420f7",
         urls = [
-            "https://storage.googleapis.com/mirror.tensorflow.org/github.com/NVIDIA/cudnn-frontend/archive/360d6e7164dfb7c802493fd1c0464f0d815b852a.zip",
-            "https://github.com/NVIDIA/cudnn-frontend/archive/360d6e7164dfb7c802493fd1c0464f0d815b852a.zip",
+            "https://storage.googleapis.com/mirror.tensorflow.org/github.com/NVIDIA/cudnn-frontend/archive/51e60d891b689d618e7a623509a779c422a420f7.zip",
+            "https://github.com/NVIDIA/cudnn-frontend/archive/51e60d891b689d618e7a623509a779c422a420f7.zip",
         ],
     )
 
@@ -181,11 +181,11 @@ def _tf_repositories():
     tf_http_archive(
         name = "mkl_dnn_v1",
         build_file = "//third_party/mkl_dnn:mkldnn_v1.BUILD",
-        sha256 = "4d655c0751ee6439584ef5e3d465953fe0c2f4ee2700bc02699bdc1d1572af0d",
-        strip_prefix = "oneDNN-2.2",
+        sha256 = "82795714f11649b2a3f797d99bd07d117cde97215f55654b028ca00f3b33e0cb",
+        strip_prefix = "oneDNN-2.3-rc2",
         urls = [
-            "https://storage.googleapis.com/mirror.tensorflow.org/github.com/oneapi-src/oneDNN/archive/v2.2.tar.gz",
-            "https://github.com/oneapi-src/oneDNN/archive/v2.2.tar.gz",
+            "https://storage.googleapis.com/mirror.tensorflow.org/github.com/oneapi-src/oneDNN/archive/v2.3-rc2.tar.gz",
+            "https://github.com/oneapi-src/oneDNN/archive/v2.3-rc2.tar.gz",
         ],
     )
 
@@ -347,12 +347,12 @@ def _tf_repositories():
     tf_http_archive(
         name = "org_sqlite",
         build_file = "//third_party:sqlite.BUILD",
-        sha256 = "a629d0b1cc301347109e8ad211ff46af371b6ef73c41b7698e9cf1fb37bf4b95",
-        strip_prefix = "sqlite-amalgamation-3350300",
+        sha256 = "b49409ef123e193e719e2536f9b795482a69e61a9cc728933739b9024f035061",
+        strip_prefix = "sqlite-amalgamation-3350500",
         system_build_file = "//third_party/systemlibs:sqlite.BUILD",
         urls = [
-            "https://storage.googleapis.com/mirror.tensorflow.org/sqlite.org/2021/sqlite-amalgamation-3350300.zip",
-            "https://sqlite.org/2021/sqlite-amalgamation-3350300.zip",
+            "https://storage.googleapis.com/mirror.tensorflow.org/sqlite.org/2021/sqlite-amalgamation-3350500.zip",
+            "https://sqlite.org/2021/sqlite-amalgamation-3350500.zip",
         ],
     )
 
@@ -570,6 +570,7 @@ def _tf_repositories():
         system_build_file = "//third_party/systemlibs:protobuf.BUILD",
         system_link_files = {
             "//third_party/systemlibs:protobuf.bzl": "protobuf.bzl",
+            "//third_party/systemlibs:protobuf_deps.bzl": "protobuf_deps.bzl",
         },
         urls = [
             "https://storage.googleapis.com/mirror.tensorflow.org/github.com/protocolbuffers/protobuf/archive/v3.9.2.zip",
@@ -605,18 +606,6 @@ def _tf_repositories():
         urls = [
             "https://storage.googleapis.com/mirror.tensorflow.org/github.com/gflags/gflags/archive/v2.2.1.tar.gz",
             "https://github.com/gflags/gflags/archive/v2.2.1.tar.gz",
-        ],
-    )
-
-    tf_http_archive(
-        name = "pcre",
-        build_file = "//third_party:pcre.BUILD",
-        sha256 = "aecafd4af3bd0f3935721af77b889d9024b2e01d96b58471bd91a3063fb47728",
-        strip_prefix = "pcre-8.44",
-        system_build_file = "//third_party/systemlibs:pcre.BUILD",
-        urls = [
-            "https://storage.googleapis.com/mirror.tensorflow.org/ftp.exim.org/pub/pcre/pcre-8.44.tar.gz",
-            "https://ftp.exim.org/pub/pcre/pcre-8.44.tar.gz",
         ],
     )
 
@@ -682,24 +671,24 @@ def _tf_repositories():
     tf_http_archive(
         name = "lmdb",
         build_file = "//third_party:lmdb.BUILD",
-        sha256 = "f3927859882eb608868c8c31586bb7eb84562a40a6bf5cc3e13b6b564641ea28",
-        strip_prefix = "lmdb-LMDB_0.9.22/libraries/liblmdb",
+        sha256 = "22054926b426c66d8f2bc22071365df6e35f3aacf19ad943bc6167d4cae3bebb",
+        strip_prefix = "lmdb-LMDB_0.9.29/libraries/liblmdb",
         system_build_file = "//third_party/systemlibs:lmdb.BUILD",
         urls = [
-            "https://storage.googleapis.com/mirror.tensorflow.org/github.com/LMDB/lmdb/archive/LMDB_0.9.22.tar.gz",
-            "https://github.com/LMDB/lmdb/archive/LMDB_0.9.22.tar.gz",
+            "https://storage.googleapis.com/mirror.tensorflow.org/github.com/LMDB/lmdb/archive/LMDB_0.9.29.tar.gz",
+            "https://github.com/LMDB/lmdb/archive/refs/tags/LMDB_0.9.29.tar.gz",
         ],
     )
 
     tf_http_archive(
         name = "jsoncpp_git",
         build_file = "//third_party:jsoncpp.BUILD",
-        sha256 = "77a402fb577b2e0e5d0bdc1cf9c65278915cdb25171e3452c68b6da8a561f8f0",
-        strip_prefix = "jsoncpp-1.9.2",
+        sha256 = "e34a628a8142643b976c7233ef381457efad79468c67cb1ae0b83a33d7493999",
+        strip_prefix = "jsoncpp-1.9.4",
         system_build_file = "//third_party/systemlibs:jsoncpp.BUILD",
         urls = [
-            "https://storage.googleapis.com/mirror.tensorflow.org/github.com/open-source-parsers/jsoncpp/archive/1.9.2.tar.gz",
-            "https://github.com/open-source-parsers/jsoncpp/archive/1.9.2.tar.gz",
+            "https://storage.googleapis.com/mirror.tensorflow.org/github.com/open-source-parsers/jsoncpp/archive/1.9.4.tar.gz",
+            "https://github.com/open-source-parsers/jsoncpp/archive/1.9.4.tar.gz",
         ],
     )
 

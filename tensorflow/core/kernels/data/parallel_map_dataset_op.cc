@@ -19,13 +19,13 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/function.h"
 #include "tensorflow/core/common_runtime/input_colocation_exemption_registry.h"
 #include "tensorflow/core/common_runtime/metrics.h"
+#include "tensorflow/core/data/dataset_utils.h"
+#include "tensorflow/core/data/name_utils.h"
+#include "tensorflow/core/data/stats_utils.h"
 #include "tensorflow/core/framework/model.h"
 #include "tensorflow/core/framework/partial_tensor_shape.h"
 #include "tensorflow/core/framework/stats_aggregator.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "tensorflow/core/kernels/data/dataset_utils.h"
-#include "tensorflow/core/kernels/data/name_utils.h"
-#include "tensorflow/core/kernels/data/stats_utils.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/random/random.h"
 #include "tensorflow/core/platform/stringprintf.h"
@@ -339,7 +339,7 @@ class ParallelMapDatasetOp::Dataset : public DatasetBase {
         for (size_t j = 0; j < num_return_values; j++) {
           result.return_values.emplace_back();
           TF_RETURN_IF_ERROR(reader->ReadTensor(
-              element_prefix, absl::StrCat(kComponent, "[", j, "]"),
+              ctx->flr(), element_prefix, absl::StrCat(kComponent, "[", j, "]"),
               &result.return_values.back()));
         }
         result.end_of_input = reader->Contains(element_prefix, kEndOfInput);

@@ -241,6 +241,7 @@ class KernelAndDeviceOp final : public KernelAndDevice {
 
  private:
   std::unique_ptr<OpKernel> kernel_;
+  bool is_distributed_communication_op_;
   gtl::InlinedVector<AllocatorAttributes, 4> input_alloc_attrs_;
   std::vector<Device*> input_devices_;
   gtl::InlinedVector<AllocatorAttributes, 1> output_alloc_attrs_;
@@ -323,6 +324,12 @@ class KernelAndDeviceFunc : public KernelAndDevice {
   const string& name() const override { return name_; };
 
  private:
+  std::shared_ptr<FunctionLibraryRuntime::Options> PrepareForRun(
+      ScopedStepContainer* step_container, std::vector<EagerKernelRet>* outputs,
+      CancellationManager* cancellation_manager,
+      const absl::optional<EagerRemoteFunctionParams>& remote_func_params,
+      const absl::optional<ManagedStackTrace>& stack_trace);
+
   ProcessFunctionLibraryRuntime* const pflr_;  // non-null
   FunctionLibraryRuntime::Handle handle_;
   // Indicates whether the function needs to execute cross process.

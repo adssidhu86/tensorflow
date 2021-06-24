@@ -36,6 +36,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/layout_util.h"
 #include "tensorflow/compiler/xla/python/py_client.h"
 #include "tensorflow/compiler/xla/python/types.h"
+#include "tensorflow/compiler/xla/service/computation_placer.h"
 #include "tensorflow/compiler/xla/service/custom_call_target_registry.h"
 #include "tensorflow/compiler/xla/service/hlo_graph_dumper.h"
 #include "tensorflow/compiler/xla/service/hlo_instruction.h"
@@ -48,6 +49,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/statusor.h"
 #include "tensorflow/compiler/xla/util.h"
 #include "tensorflow/compiler/xla/xla_data.pb.h"
+#include "tensorflow/core/lib/strings/proto_serialization.h"
 
 namespace xla {
 namespace {
@@ -74,7 +76,8 @@ static std::string UniquifyName(const std::string& name) {
 StatusOr<py::bytes> GetComputationSerializedProto(
     const XlaComputation& computation) {
   std::string result;
-  if (!computation.proto().SerializeToString(&result)) {
+  if (!tensorflow::SerializeToStringDeterministic(computation.proto(),
+                                                  &result)) {
     return Unknown("Failed to serialize the HloModuleProto.");
   }
   return py::bytes(result);
@@ -83,7 +86,7 @@ StatusOr<py::bytes> GetComputationSerializedProto(
 // Converts a hlo module to a serialized HloModuleProto.
 StatusOr<py::bytes> GetHloModuleSerializedProto(const HloModule& module) {
   std::string result;
-  if (!module.ToProto().SerializeToString(&result)) {
+  if (!tensorflow::SerializeToStringDeterministic(module.ToProto(), &result)) {
     return Unknown("Failed to serialize the HloModuleProto.");
   }
   return py::bytes(result);
@@ -317,6 +320,19 @@ void BuildXlaCompilerSubmodule(py::module& m) {
       .def("result_shape", &ProgramShape::result)
       .def("__repr__", &ProgramShape::ToString);
 
+  py::class_<ShapeIndex>(m, "ShapeIndex")
+      .def(py::init([](const std::vector<int64>& v) {
+        return std::make_unique<ShapeIndex>(v.begin(), v.end());
+      }))
+      .def("__repr__", &ShapeIndex::ToString)
+      .def("__eq__", [](const ShapeIndex& shape_ind,
+                        const ShapeIndex& other) { return shape_ind == other; })
+      .def("__ne__", [](const ShapeIndex& shape_ind,
+                        const ShapeIndex& other) { return shape_ind != other; })
+      .def("__hash__", [](const ShapeIndex& shape_ind) {
+        return absl::Hash<ShapeIndex>()(shape_ind);
+      });
+
   // Literals
   py::class_<Literal, std::shared_ptr<Literal>>(m, "Literal")
       .def("__repr__", &Literal::ToString);
@@ -482,7 +498,16 @@ void BuildXlaCompilerSubmodule(py::module& m) {
                   })
       .def("replica_count", &DeviceAssignment::replica_count)
       .def("computation_count", &DeviceAssignment::computation_count)
-      .def("__repr__", &DeviceAssignment::ToString);
+      .def("__repr__", &DeviceAssignment::ToString)
+      .def("serialize", [](const DeviceAssignment& da) -> StatusOr<py::bytes> {
+        DeviceAssignmentProto proto;
+        TF_RETURN_IF_ERROR(da.Serialize(&proto));
+        std::string result;
+        if (!tensorflow::SerializeToStringDeterministic(proto, &result)) {
+          return Unknown("Failed to serialize the DeviceAssignmentProto.");
+        }
+        return py::bytes(result);
+      });
 
   py::class_<CompileOptions> compile_options(m, "CompileOptions");
   compile_options
@@ -547,6 +572,9 @@ void BuildXlaCompilerSubmodule(py::module& m) {
       .def_property("xla_cpu_enable_fast_math",
                     &DebugOptions::xla_cpu_enable_fast_math,
                     &DebugOptions::set_xla_cpu_enable_fast_math)
+      .def_property("xla_cpu_enable_xprof_traceme",
+                    &DebugOptions::xla_cpu_enable_xprof_traceme,
+                    &DebugOptions::set_xla_cpu_enable_xprof_traceme)
       .def_property("xla_cpu_fast_math_honor_infs",
                     &DebugOptions::xla_cpu_fast_math_honor_infs,
                     &DebugOptions::set_xla_cpu_fast_math_honor_infs)
@@ -565,9 +593,11 @@ void BuildXlaCompilerSubmodule(py::module& m) {
       .def_property("xla_gpu_enable_fast_min_max",
                     &DebugOptions::xla_gpu_enable_fast_min_max,
                     &DebugOptions::set_xla_gpu_enable_fast_min_max)
-      .def_property("xla_cpu_enable_xprof_traceme",
-                    &DebugOptions::xla_cpu_enable_xprof_traceme,
-                    &DebugOptions::set_xla_cpu_enable_xprof_traceme)
+      .def_property("xla_gpu_cuda_data_dir",
+                    &DebugOptions::xla_gpu_cuda_data_dir,
+                    [](DebugOptions* self, std::string value) {
+                      self->set_xla_gpu_cuda_data_dir(value);
+                    })
       .def_property("xla_llvm_disable_expensive_passes",
                     &DebugOptions::xla_llvm_disable_expensive_passes,
                     &DebugOptions::set_xla_llvm_disable_expensive_passes)

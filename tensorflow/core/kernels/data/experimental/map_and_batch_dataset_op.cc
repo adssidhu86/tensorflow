@@ -20,13 +20,13 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/function.h"
 #include "tensorflow/core/common_runtime/input_colocation_exemption_registry.h"
 #include "tensorflow/core/common_runtime/metrics.h"
+#include "tensorflow/core/data/dataset_utils.h"
+#include "tensorflow/core/data/name_utils.h"
+#include "tensorflow/core/data/stats_utils.h"
 #include "tensorflow/core/framework/model.h"
 #include "tensorflow/core/framework/partial_tensor_shape.h"
 #include "tensorflow/core/framework/stats_aggregator.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "tensorflow/core/kernels/data/dataset_utils.h"
-#include "tensorflow/core/kernels/data/name_utils.h"
-#include "tensorflow/core/kernels/data/stats_utils.h"
 #include "tensorflow/core/kernels/inplace_ops_functor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/gtl/cleanup.h"
@@ -611,8 +611,8 @@ class MapAndBatchDatasetOp::Dataset : public DatasetBase {
       result->output_allocated = reader->Contains(
           full_name(strings::StrCat(batch_prefix, "_", kOutputAllocated)));
 
-      TF_RETURN_IF_ERROR(ReadBatch(dataset()->batch_size_, prefix(),
-                                   batch_prefix, ctx, reader, &result->output));
+      TF_RETURN_IF_ERROR(ReadBatch(ctx, reader, dataset()->batch_size_,
+                                   prefix(), batch_prefix, &result->output));
       TF_RETURN_IF_ERROR(ReadStatus(prefix(),
                                     strings::StrCat(batch_prefix, "_", kStatus),
                                     reader, &result->status));

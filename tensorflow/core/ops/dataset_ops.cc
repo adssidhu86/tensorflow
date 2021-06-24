@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/framework/common_shape_fns.h"
+#include "tensorflow/core/framework/full_type.pb.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_def_builder.h"
 #include "tensorflow/core/framework/shape_inference.h"
@@ -28,17 +29,17 @@ namespace tensorflow {
 // "MakeIterator" op.
 //
 // TODO(b/123753214): DT_VARIANT tensors that represent "dataset" objects are
-// not presently serializable. To avoid issues with constant folding, ensure
-// that any "source dataset" ops (i.e. ops that output a dataset and do not
-// take one as input) are marked "stateful".
+// not presently serializable. To avoid issues with graph optimizations, such
+// as constant folding, CSE, or DCE, ensure that any "source dataset" ops
+// (i.e. ops that output a dataset and do not take one as input) are
+// marked as "do not optimize".
 
 REGISTER_OP("TensorDataset")
     .Input("components: Toutput_types")
     .Output("handle: variant")
     .Attr("Toutput_types: list(type) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn(shape_inference::ScalarShape);  // TODO(mrry): Validate that
                                                 // `components` have shapes
                                                 // compatible with
@@ -49,8 +50,7 @@ REGISTER_OP("TensorSliceDataset")
     .Output("handle: variant")
     .Attr("Toutput_types: list(type) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn(shape_inference::ScalarShape);  // TODO(mrry): Validate that the
                                                 // dim-0 slices of `components`
                                                 // have shapes compatible with
@@ -62,8 +62,7 @@ REGISTER_OP("SparseTensorSliceDataset")
     .Input("dense_shape: int64")
     .Output("handle: variant")
     .Attr("Tvalues: type")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn(shape_inference::ScalarShape);
 
 REGISTER_OP("GeneratorDataset")
@@ -79,8 +78,7 @@ REGISTER_OP("GeneratorDataset")
     .Attr("Tfinalize_func_args: list(type) >= 0")
     .Attr("output_types: list(type) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn(shape_inference::ScalarShape);
 
 REGISTER_OP("ZipDataset")
@@ -415,8 +413,7 @@ REGISTER_OP("RangeDataset")
     .Output("handle: variant")
     .Attr("output_types: list(type) >= 1")
     .Attr("output_shapes: list(shape) >= 1")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // start, stop, and step should be scalars.
@@ -623,8 +620,7 @@ REGISTER_OP("TextLineDataset")
     .Input("compression_type: string")
     .Input("buffer_size: int64")
     .Output("handle: variant")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // `filenames` must be a scalar or a vector.
@@ -643,8 +639,7 @@ REGISTER_OP("FixedLengthRecordDataset")
     .Input("footer_bytes: int64")
     .Input("buffer_size: int64")
     .Output("handle: variant")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // `filenames` must be a scalar or a vector.
@@ -666,8 +661,7 @@ REGISTER_OP("FixedLengthRecordDatasetV2")
     .Input("buffer_size: int64")
     .Input("compression_type: string")
     .Output("handle: variant")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // `filenames` must be a scalar or a vector.
@@ -686,8 +680,7 @@ REGISTER_OP("TFRecordDataset")
     .Input("compression_type: string")
     .Input("buffer_size: int64")
     .Output("handle: variant")
-    .SetDoNotOptimize()  // TODO(b/123753214): Source dataset ops must
-                         // disable constant folding.
+    .SetDoNotOptimize()  // TODO(b/123753214): See comment in dataset_ops.cc.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;
       // `filenames` must be a scalar or a vector.
@@ -875,14 +868,29 @@ REGISTER_OP("OptionalFromValue")
     .Input("components: Toutput_types")
     .Output("optional: variant")
     .Attr("Toutput_types: list(type) >= 1")
+    .SetTypeConstructor(full_type::Unary(TFT_OPTIONAL, "Toutput_types"))
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       std::vector<DataType> dtypes;
       TF_RETURN_IF_ERROR(c->GetAttr("Toutput_types", &dtypes));
       c->set_output(0, c->Scalar());
       std::vector<shape_inference::ShapeAndType> shapes_and_types;
       shapes_and_types.reserve(c->num_inputs());
+      const FullTypeDef& ret_types = c->ret_types();
       for (int i = 0; i < c->num_inputs(); ++i) {
-        shapes_and_types.emplace_back(c->input(i), dtypes[i], ST_OPTIONAL);
+        // TODO(mdan): output_type(i) == optional is incorrect.
+        // "Optional" is the type of the the whole container, not of individual
+        // elements.
+        //
+        // Why ret_types.args(0) and not args(i) --
+        // For example if Toutput_types is (int32, float32), then
+        // ret_types.args[0] (i.e. the 0th output) is
+        // Optional[Record[Tensor[int32, s1], Tensor[float32, s2]]]
+        // set_output_handle_shapes_and_types tracks the same thing, but in
+        // a transposed way:
+        // {ShapeAndType(in32, s1, Optional), ShapeAndType(in32, s2, Optional)}
+        // That should be corrected in the future (see todo above).
+        shapes_and_types.emplace_back(c->input(i), dtypes[i],
+                                      ret_types.args(0));
       }
       c->set_output_handle_shapes_and_types(0, shapes_and_types);
       return Status::OK();

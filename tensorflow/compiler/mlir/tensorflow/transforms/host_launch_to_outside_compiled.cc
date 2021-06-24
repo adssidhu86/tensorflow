@@ -20,6 +20,7 @@ limitations under the License.
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Pass/PassRegistry.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
+#include "tensorflow/compiler/mlir/tensorflow/transforms/tf_device_passes_detail.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/device_util.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/tpu_rewrite_device_util.h"
 
@@ -32,8 +33,8 @@ constexpr char kDeviceAttr[] = "device";
 constexpr char kXlaOutsideCompilationAttr[] = "_xla_outside_compilation";
 
 struct HostLaunchToOutsideCompiledPass
-    : public PassWrapper<HostLaunchToOutsideCompiledPass,
-                         OperationPass<ModuleOp>> {
+    : public HostLaunchToOutsideCompiledPassBase<
+          HostLaunchToOutsideCompiledPass> {
   void runOnOperation() override;
 };
 
@@ -70,10 +71,15 @@ void HostLaunchToOutsideCompiledPass::runOnOperation() {
 
   module.walk([&](tf_device::ClusterOp tpu_cluster) {
     std::string host_device;
-    // TODO(kfranko): Propagate this error once GetHostDeviceOutsideCompilation
-    // doesn't fail for model parallelism.
-    (void)tensorflow::GetHostDeviceOutsideComputation(devices, tpu_cluster,
-                                                      &host_device);
+    // If there is model parallelism, we return early since
+    // GetHostDeviceOutsideComputation will fail and an error should have been
+    // returned in an earlier pass.
+    // TODO(b/186420116): Remove this check once outside compilation and model
+    // parallelism work together.
+    if (tensorflow::HasModelParallelism(tpu_cluster)) return;
+    if (failed(tensorflow::GetHostDeviceOutsideComputation(devices, tpu_cluster,
+                                                           &host_device)))
+      return signalPassFailure();
     tpu_cluster.walk([&](tf_device::LaunchOp launch) {
       StringAttr device_attr = launch->getAttrOfType<StringAttr>(kDeviceAttr);
       if (!device_attr) return;

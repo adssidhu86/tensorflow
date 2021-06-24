@@ -1489,4 +1489,46 @@ A pseudo-op to represent host-side computation in an XLA program.
   TF_DerivedResultTypeListAttr Toutputs = TF_DerivedResultTypeListAttr<0>;
 }
 
+def TF_ConfigureAndInitializeGlobalTPUOp : TF_Op<"ConfigureAndInitializeGlobalTPU", []> {
+  let summary = [{
+An op that initialize the TPU system in a multi-client set up.
+  }];
+
+  let description = [{
+Initializes global TPU system for mutli-client execution.
+
+This op does the work of both ConfigureDistributedTpuOp and
+InitializeHostForDistributedTpuOp, and outputs the latter's result.
+  }];
+
+  let arguments = (ins);
+
+  let results = (outs
+    Res<TF_Int32Tensor, [{A vector containing the global TPU id of each TPU on the host.}]>:$output
+  );
+}
+
+def TF_ShutdownTPUSystemOp : TF_Op<"ShutdownTPUSystem", []> {
+  let summary = [{
+An op that shuts down the TPU system.
+  }];
+
+  let arguments = (ins);
+  let results = (outs
+    TF_BoolTensor:$success
+  );
+}
+
+// Internal op for testing value-based side-effects for non-resource values.
+// TODO(mgester) We should have an extension of TF dialect only for testing so
+// TF dialect is not polluted with test ops.
+def TF__InternalTestNonResourceValueSideEffects_ : TF_Op<"_InternalTestNonResourceValueSideEffects_", []> {
+  let summary = "Internal op for testing only";
+
+  let arguments = (ins
+    Arg<TF_StrTensor,"", [TF_DatasetIteratorRead, TF_DatasetIteratorWrite]>:$key
+  );
+  let results = (outs);
+}
+
 #endif // TF_OPS

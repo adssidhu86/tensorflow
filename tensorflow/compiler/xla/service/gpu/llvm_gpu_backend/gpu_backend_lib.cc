@@ -86,9 +86,9 @@ const int kDefaultInlineThreshold = 1100;
 // Gets the GPU name as it's known to LLVM for a given compute
 // capability.  If we see an unrecognized compute capability, we
 // return the highest one that is known and below the selected device.
-static string GetSmName(std::pair<int, int> compute_capability) {
+static string GetSmName(se::CudaComputeCapability compute_capability) {
   int compute_capability_version =
-      compute_capability.first * 10 + compute_capability.second;
+      compute_capability.major * 10 + compute_capability.minor;
   int sm_version = 30;
   // If the current compute capability isn't known, fallback to the
   // most recent version before it.
@@ -107,9 +107,9 @@ static string GetSmName(std::pair<int, int> compute_capability) {
   // run on SM80 too.
   if (sm_version != compute_capability_version &&
       compute_capability_version < supported_versions[0]) {
-    LOG(WARNING) << "Unknown compute capability (" << compute_capability.first
-                 << ", " << compute_capability.second << ") ."
-                 << "Defaulting to telling LLVM that we're compiling for sm_"
+    LOG(WARNING) << "Unknown compute capability "
+                 << compute_capability.ToString()
+                 << ". Defaulting to telling LLVM that we're compiling for sm_"
                  << sm_version;
   }
   return absl::StrCat("sm_", sm_version);
@@ -216,7 +216,7 @@ void AddOptimizationPasses(unsigned opt_level, unsigned size_level,
 void EmitBitcodeToFile(const llvm::Module& module, absl::string_view filename) {
   std::error_code error_code;
   llvm::ToolOutputFile outfile(string(filename).c_str(), error_code,
-                               llvm::sys::fs::F_None);
+                               llvm::sys::fs::OF_None);
   if (error_code) {
     LOG(FATAL) << "opening bitcode file for writing: " << error_code.message();
   }
@@ -314,7 +314,6 @@ Status LinkWithBitcodeVector(llvm::Module* module,
 
 // Links libdevice into the given module if the module needs libdevice.
 Status LinkLibdeviceIfNecessary(llvm::Module* module,
-                                std::pair<int, int> compute_capability,
                                 const string& libdevice_dir_path) {
   if (!CouldNeedDeviceBitcode(*module)) {
     return Status::OK();
@@ -340,12 +339,7 @@ Status NVPTXTargetModuleLinker(llvm::Module* module, GpuVersion gpu_version,
                                const string& device_bitcode_dir_path) {
   // Link the input module with libdevice, to pull in implementations of some
   // builtins.
-  auto compute_capability = absl::get_if<std::pair<int, int>>(&gpu_version);
-  if (!compute_capability) {
-    return xla::InternalError("Incompatible compute capability was specified.");
-  }
-  TF_RETURN_IF_ERROR(LinkLibdeviceIfNecessary(module, *compute_capability,
-                                              device_bitcode_dir_path));
+  TF_RETURN_IF_ERROR(LinkLibdeviceIfNecessary(module, device_bitcode_dir_path));
 
   // Set the flush-denormals-to-zero flag on the module so the NVVM reflect pass
   // can access it.
@@ -363,7 +357,7 @@ Status NVPTXTargetModuleLinker(llvm::Module* module, GpuVersion gpu_version,
 }
 
 std::unique_ptr<llvm::TargetMachine> NVPTXGetTargetMachine(
-    llvm::Triple target_triple, std::pair<int, int> compute_capability,
+    llvm::Triple target_triple, se::CudaComputeCapability compute_capability,
     const HloModuleConfig& hlo_module_config) {
   // Figure out the exact name of the processor as known to the NVPTX backend
   // from the gpu_architecture flag.
@@ -532,7 +526,8 @@ StatusOr<string> CompileToPtx(
       return string();
     }
 
-    auto compute_capability = absl::get_if<std::pair<int, int>>(&gpu_version);
+    auto compute_capability =
+        absl::get_if<se::CudaComputeCapability>(&gpu_version);
     if (!compute_capability) {
       return xla::InternalError(
           "Incompatible compute capability was specified.");
@@ -696,7 +691,7 @@ StatusOr<std::vector<uint8>> EmitModuleToHsaco(
 
   // Dump LLVM IR.
   std::unique_ptr<llvm::raw_fd_ostream> ir_fs(
-      new llvm::raw_fd_ostream(ir_path, ec, llvm::sys::fs::F_None));
+      new llvm::raw_fd_ostream(ir_path, ec, llvm::sys::fs::OF_None));
   module->print(*ir_fs, nullptr);
   ir_fs->flush();
 
@@ -713,7 +708,7 @@ StatusOr<std::vector<uint8>> EmitModuleToHsaco(
   llvm::SmallVector<char, 0> stream;
   llvm::raw_svector_ostream pstream(stream);
   std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
-      new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::F_Text));
+      new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
   module->setDataLayout(target_machine->createDataLayout());
   target_machine->addPassesToEmitFile(codegen_passes, *isabin_fs, nullptr,
                                       llvm::CGFT_ObjectFile);
@@ -722,7 +717,7 @@ StatusOr<std::vector<uint8>> EmitModuleToHsaco(
 
   if (keep_tempfiles) {
     std::unique_ptr<llvm::raw_fd_ostream> ir_fs(
-        new llvm::raw_fd_ostream(ir_opt_path, ec, llvm::sys::fs::F_None));
+        new llvm::raw_fd_ostream(ir_opt_path, ec, llvm::sys::fs::OF_None));
     module->print(*ir_fs, nullptr);
     ir_fs->flush();
   }

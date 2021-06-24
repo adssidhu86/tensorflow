@@ -1747,11 +1747,35 @@ func @matmul_batchv2(%arg0: tensor<2x10x15xf32>, %arg1: tensor<15x17xf32>) -> te
 // CHECK: "tfl.batch_matmul"(%arg0, %arg1) {adj_x = false, adj_y = false} : (tensor<2x10x15xf32>, tensor<15x17xf32>) -> tensor<2x10x17xf32>
 }
 
+func @matmul_batchv3(%arg0: tensor<2x10x15xf32>, %arg1: tensor<15x17xf32>) -> tensor<2x10x17xf32> {
+  %0 = "tf.BatchMatMulV3"(%arg0, %arg1) {Ta = "tfdtype$DT_FLOAT", Tb = "tfdtype$DT_FLOAT",device = "/device:CPU:0", name = "MatMul", adj_x = false, adj_y = false} :
+(tensor<2x10x15xf32>, tensor<15x17xf32>) -> tensor<2x10x17xf32>
+  return %0 : tensor<2x10x17xf32>
+// CHECK-LABEL: matmul_batchv3
+// CHECK: "tfl.batch_matmul"(%arg0, %arg1) {adj_x = false, adj_y = false} : (tensor<2x10x15xf32>, tensor<15x17xf32>) -> tensor<2x10x17xf32>
+}
+
+func @matmul_batchv3_int8(%arg0: tensor<2x10x15xi8>, %arg1: tensor<15x17xi8>) -> tensor<2x10x17xi32> {
+  %0 = "tf.BatchMatMulV3"(%arg0, %arg1) {Ta = "tfdtype$DT_INT8", Tb = "tfdtype$DT_INT8", Tout = "tfdtype$DT_INT32", device = "/device:CPU:0", name = "MatMul", adj_x = false, adj_y = false} :
+(tensor<2x10x15xi8>, tensor<15x17xi8>) -> tensor<2x10x17xi32>
+  return %0 : tensor<2x10x17xi32>
+// CHECK-LABEL: matmul_batchv3_int8
+// CHECK: "tfl.batch_matmul"(%arg0, %arg1) {adj_x = false, adj_y = false} : (tensor<2x10x15xi8>, tensor<15x17xi8>) -> tensor<2x10x17xi32>
+}
+
 func @matmul_batchv2_unknown_dim(%arg0: tensor<?x10x15xf32>, %arg1: tensor<15x17xf32>) -> tensor<?x10x17xf32> {
   %0 = "tf.BatchMatMulV2"(%arg0, %arg1) {T = "tfdtype$DT_FLOAT", device = "/device:CPU:0", name = "MatMul", adj_x = false, adj_y = false} :
 (tensor<?x10x15xf32>, tensor<15x17xf32>) -> tensor<?x10x17xf32>
   return %0 : tensor<?x10x17xf32>
 // CHECK-LABEL: matmul_batchv2_unknown_dim
+// CHECK: "tfl.batch_matmul"(%arg0, %arg1) {adj_x = false, adj_y = false} : (tensor<?x10x15xf32>, tensor<15x17xf32>) -> tensor<?x10x17xf32>
+}
+
+func @matmul_batchv3_unknown_dim(%arg0: tensor<?x10x15xf32>, %arg1: tensor<15x17xf32>) -> tensor<?x10x17xf32> {
+  %0 = "tf.BatchMatMulV3"(%arg0, %arg1) {Ta = "tfdtype$DT_FLOAT", Tb = "tfdtype$DT_FLOAT", device = "/device:CPU:0", name = "MatMul", adj_x = false, adj_y = false} :
+(tensor<?x10x15xf32>, tensor<15x17xf32>) -> tensor<?x10x17xf32>
+  return %0 : tensor<?x10x17xf32>
+// CHECK-LABEL: matmul_batchv3_unknown_dim
 // CHECK: "tfl.batch_matmul"(%arg0, %arg1) {adj_x = false, adj_y = false} : (tensor<?x10x15xf32>, tensor<15x17xf32>) -> tensor<?x10x17xf32>
 }
 
@@ -2100,4 +2124,37 @@ func @quantize_dequantize_v4(%arg0 : tensor<?x?xf32>) -> tensor<?x?xf32> {
 // CHECK:  %[[QUANT:.*]] = "tfl.quantize"(%arg0) {qtype = tensor<?x?x!quant.uniform<u8:f32, 1.000000e+00>>} : (tensor<?x?xf32>) -> tensor<?x?x!quant.uniform<u8:f32, 1.000000e+00>>
 // CHECK:  %[[DEQUANT:.*]] = "tfl.dequantize"(%[[QUANT]]) : (tensor<?x?x!quant.uniform<u8:f32, 1.000000e+00>>) -> tensor<?x?xf32>
 // CHECK:  return %[[DEQUANT]]
+}
+
+func @conv3d_transpose(%arg0: tensor<2x5x6x8x2xf32>, %arg1: tensor<1x2x2x3x2xf32>, %arg2: tensor<5xi64>) -> tensor<?x?x?x?x?xf32> {
+  %0 = "tf.Conv3DBackpropInputV2"(%arg2, %arg1, %arg0) {data_format = "NDHWC", dilations = [1, 1, 1, 1, 1], padding = "VALID", strides = [1, 2, 2, 2, 1]} : (tensor<5xi64>, tensor<1x2x2x3x2xf32>, tensor<2x5x6x8x2xf32>) -> tensor<?x?x?x?x?xf32>
+  return %0 : tensor<?x?x?x?x?xf32>
+  // CHECK-LABEL: conv3d_transpose
+  // CHECK: %[[CST:.*]] = constant unit
+  // CHECK: %[[OUT_SHAPE:.*]] = "tfl.cast"(%arg2) : (tensor<5xi64>) -> tensor<5xi32>
+  // CHECK: %[[RESULT:.*]] = "tfl.conv_3d_transpose"(%[[OUT_SHAPE]], %arg1, %arg0, %[[CST]]) {dilation_d_factor = 1 : i32, dilation_h_factor = 1 : i32, dilation_w_factor = 1 : i32, fused_activation_function = "NONE", padding = "VALID", stride_d = 2 : i32, stride_h = 2 : i32, stride_w = 2 : i32} : (tensor<5xi32>, tensor<1x2x2x3x2xf32>, tensor<2x5x6x8x2xf32>, none) -> tensor<?x?x?x?x?xf32>
+  // CHECK: return %[[RESULT]] : tensor<?x?x?x?x?xf32>
+}
+
+func @conv3d_transpose_unmatched_channels(%arg0: tensor<2x5x6x8x3xf32>, %arg1: tensor<1x2x2x3x2xf32>, %arg2: tensor<5xi64>) -> tensor<?x?x?x?x?xf32> {
+  %0 = "tf.Conv3DBackpropInputV2"(%arg2, %arg1, %arg0) {data_format = "NDHWC", dilations = [1, 1, 1, 1, 1], padding = "VALID", strides = [1, 2, 2, 2, 1]} : (tensor<5xi64>, tensor<1x2x2x3x2xf32>, tensor<2x5x6x8x3xf32>) -> tensor<?x?x?x?x?xf32>
+  return %0 : tensor<?x?x?x?x?xf32>
+  // CHECK-LABEL: conv3d_transpose_unmatched_channels
+  // CHECK: "tf.Conv3DBackpropInputV2"
+}
+
+func @conv3d_transpose_unsupported_strides(%arg0: tensor<2x5x6x8x2xf32>, %arg1: tensor<1x2x2x3x2xf32>, %arg2: tensor<5xi64>) -> tensor<?x?x?x?x?xf32> {
+  %0 = "tf.Conv3DBackpropInputV2"(%arg2, %arg1, %arg0) {data_format = "NDHWC", dilations = [1, 1, 1, 1, 1], padding = "VALID", strides = [2, 2, 2, 2, 1]} : (tensor<5xi64>, tensor<1x2x2x3x2xf32>, tensor<2x5x6x8x2xf32>) -> tensor<?x?x?x?x?xf32>
+  return %0 : tensor<?x?x?x?x?xf32>
+  // CHECK-LABEL: conv3d_transpose_unsupported_strides
+  // CHECK: "tf.Conv3DBackpropInputV2"
+}
+
+func @mul_i64(%arg0: tensor<14xi64>, %arg1: tensor<14xi64>) -> tensor<14xi64> {
+  %0 = "tf.Mul"(%arg0, %arg1) : (tensor<14xi64>, tensor<14xi64>) -> tensor<14xi64>
+  return %0: tensor<14xi64>
+
+// CHECK-LABEL: mul_i64
+// CHECK:  tfl.mul %arg0, %arg1 {fused_activation_function = "NONE"} : tensor<14xi64>
+// CHECK:  return
 }

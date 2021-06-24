@@ -27,16 +27,15 @@ def TFKernelToLLVMPass : Pass<"tf-kernel-to-llvm", "ModuleOp"> {
   ];
 }
 
-def EmbedTFFrameworkFunctionAndAllocPass
-    : Pass<"embed-tf-framework-func-and-alloc", "ModuleOp"> {
-  let summary = "Pass to embed TF Framework for allocation and context";
-  let constructor = "tf_framework::CreateEmbedTFFrameworkFunctionAndAllocPass()";
+def EmbedTFFrameworkPass
+    : Pass<"embed-tf-framework", "ModuleOp"> {
+  let summary = "Pass to embed TF Framework for allocation and assertions,";
+  let constructor = "tf_framework::CreateEmbedTFFrameworkPass()";
 }
 
-def EmbedTFFrameworkAssertPass
-    : Pass<"embed-tf-framework-assert", "ModuleOp"> {
-  let summary = "Pass to rewrite assertions to TF framework calls";
-  let constructor = "tf_framework::CreateEmbedTFFrameworkAssertPass()";
+def RewriteTFFrameworkAssert : Pass<"rewrite-tf-framework-assert", "ModuleOp"> {
+  let summary = "Pass to rewrite TFAssertOps to CondBranchOp";
+  let constructor = "tf_framework::CreateRewriteTFFrameworkAssert()";
 }
 
 def BufferReusePass : FunctionPass<"buffer-reuse"> {
@@ -132,6 +131,25 @@ def ShapeSimplification
     : FunctionPass<"kernelgen-shape-simplification"> {
   let summary = "Simplify shape ops";
   let constructor = "transforms::CreateShapeSimplification()";
+}
+
+def VectorizationPass : FunctionPass<"vectorization"> {
+  let summary = "Pass to create vectorized operations for CPU.";
+  let constructor = "transforms::CreateVectorizationPass()";
+  let description = [{
+    Takes linalg loops on buffers and vectorizes the loads/stores and operations
+    in between. This is intended for the CPU backend.
+  }];
+}
+
+def VectorizationCleanupPass : FunctionPass<"vectorization-cleanup"> {
+  let summary = "Pass to remove dead code in VectorizationPass.";
+  let constructor = "transforms::CreateVectorizationCleanupPass()";
+  let description = [{
+    VectorizationPass creates some memory transfers that are unneeded but cannot
+    be safely removed by current generic infrastructure. This removes the
+    specific operations.
+  }];
 }
 
 #endif // TF_KERNEL_GEN_PASSES

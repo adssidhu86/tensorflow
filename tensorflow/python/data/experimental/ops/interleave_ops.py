@@ -18,7 +18,6 @@ from __future__ import division
 from __future__ import print_function
 
 from tensorflow.python import tf2
-from tensorflow.python.compat import compat
 from tensorflow.python.data.experimental.ops import random_ops
 from tensorflow.python.data.ops import dataset_ops
 from tensorflow.python.data.ops import readers
@@ -125,26 +124,22 @@ class _DirectedInterleaveDataset(dataset_ops.DatasetV2):
                          first_output_classes,
                          dataset_ops.get_legacy_output_classes(data_input)))
 
-    output_shapes = dataset_ops.get_legacy_output_shapes(self._data_inputs[0])
+    spec = self._data_inputs[0].element_spec
     for data_input in self._data_inputs[1:]:
-      output_shapes = nest.pack_sequence_as(output_shapes, [
-          ts1.most_specific_compatible_shape(ts2) for (ts1, ts2) in zip(
-              nest.flatten(output_shapes),
-              nest.flatten(dataset_ops.get_legacy_output_shapes(data_input)))
+      spec = nest.pack_sequence_as(spec, [
+          x.most_specific_compatible_type(y) for (x, y) in zip(
+              nest.flatten(spec),
+              nest.flatten(data_input.element_spec))
       ])
-    self._element_spec = structure.convert_legacy_structure(
-        first_output_types, output_shapes, first_output_classes)
-
-    compat_kwargs = {}
-    if compat.forward_compatible(2021, 5, 14) or self._stop_on_empty_dataset:
-      compat_kwargs["stop_on_empty_dataset"] = self._stop_on_empty_dataset
+    self._element_spec = spec
 
     # pylint: disable=protected-access
     variant_tensor = (
         gen_experimental_dataset_ops.directed_interleave_dataset(
             self._selector_input._variant_tensor,
             [data_input._variant_tensor for data_input in self._data_inputs],
-            **compat_kwargs, **self._flat_structure))
+            stop_on_empty_dataset=self._stop_on_empty_dataset,
+            **self._flat_structure))
 
     super(_DirectedInterleaveDataset, self).__init__(variant_tensor)
 
@@ -187,12 +182,12 @@ def sample_from_datasets_v2(datasets,
   ```
 
   Args:
-    datasets: A list of `tf.data.Dataset` objects with compatible structure.
-    weights: (Optional.) A list of `len(datasets)` floating-point values where
-      `weights[i]` represents the probability with which an element should be
-      sampled from `datasets[i]`, or a `tf.data.Dataset` object where each
-      element is such a list. Defaults to a uniform distribution across
-      `datasets`.
+    datasets: A non-empty list of `tf.data.Dataset` objects with compatible
+      structure.
+    weights: (Optional.) A list or Tensor of `len(datasets)` floating-point
+      values where `weights[i]` represents the probability to sample from
+      `datasets[i]`, or a `tf.data.Dataset` object where each element is such a
+      list. Defaults to a uniform distribution across `datasets`.
     seed: (Optional.) A `tf.int64` scalar `tf.Tensor`, representing the random
       seed that will be used to create the distribution. See
       `tf.random.set_seed` for behavior.
@@ -209,25 +204,42 @@ def sample_from_datasets_v2(datasets,
 
   Raises:
     TypeError: If the `datasets` or `weights` arguments have the wrong type.
-    ValueError: If the `weights` argument is specified and does not match the
-      length of the `datasets` element.
+    ValueError:
+      - If `datasets` is empty, or
+      - If `weights` is specified and does not match the length of `datasets`.
   """
-  num_datasets = len(datasets)
+  def _shapes_are_compatible(datasets, weights):
+    if isinstance(weights, ops.Tensor):
+      return weights.shape.is_compatible_with([len(datasets)])
+    return len(datasets) == len(weights)
+
+  def _skip_datasets_with_zero_weight(datasets, weights):
+    datasets_and_weights = [(dataset, weight)
+                            for (dataset, weight) in zip(datasets, weights)
+                            if weight > 0]
+    return (zip(*datasets_and_weights) if datasets_and_weights else
+            ([datasets[0].take(0)], [1.]))
+
+  if not datasets:
+    raise ValueError("`datasets` must be a non-empty list of datasets.")
+
   if not isinstance(weights, dataset_ops.DatasetV2):
     if weights is None:
       # Select inputs with uniform probability.
-      logits = [[1.0] * num_datasets]
+      logits = [[1.0] * len(datasets)]
 
     else:
+      if not _shapes_are_compatible(datasets, weights):
+        raise ValueError("`weights` must have the same length as `datasets`.")
+
       # Use the given `weights` as the probability of choosing the respective
       # input.
+      if not isinstance(weights, ops.Tensor):
+        datasets, weights = _skip_datasets_with_zero_weight(datasets, weights)
       weights = ops.convert_to_tensor(weights, name="weights")
       if weights.dtype not in (dtypes.float32, dtypes.float64):
         raise TypeError("`weights` must be convertible to a tensor of "
                         "`tf.float32` or `tf.float64` elements.")
-      if not weights.shape.is_compatible_with([num_datasets]):
-        raise ValueError(
-            "`weights` must be a vector of length `len(datasets)`.")
 
       # The `stateless_multinomial()` op expects log-probabilities, as opposed
       # to weights.
@@ -311,7 +323,8 @@ def choose_from_datasets_v2(datasets,
   ```
 
   Args:
-    datasets: A list of `tf.data.Dataset` objects with compatible structure.
+    datasets: A non-empty list of `tf.data.Dataset` objects with compatible
+      structure.
     choice_dataset: A `tf.data.Dataset` of scalar `tf.int64` tensors between `0`
       and `len(datasets) - 1`.
     stop_on_empty_dataset: If `True`, selection stops if it encounters an empty
@@ -326,11 +339,13 @@ def choose_from_datasets_v2(datasets,
     of `choice_dataset`.
 
   Raises:
-    TypeError: If the `datasets` or `choice_dataset` arguments have the wrong
-      type.
+    TypeError: If `datasets` or `choice_dataset` has the wrong type.
+    ValueError: If `datasets` is empty.
   """
-  if not structure.are_compatible(choice_dataset.element_spec,
-                                  tensor_spec.TensorSpec([], dtypes.int64)):
+  if not datasets:
+    raise ValueError("`datasets` must be a non-empty list of datasets.")
+  if choice_dataset is None or not structure.are_compatible(
+      choice_dataset.element_spec, tensor_spec.TensorSpec([], dtypes.int64)):
     raise TypeError("`choice_dataset` must be a dataset of scalar "
                     "`tf.int64` tensors.")
   return _DirectedInterleaveDataset(choice_dataset, datasets,

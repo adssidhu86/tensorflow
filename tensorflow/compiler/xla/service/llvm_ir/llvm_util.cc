@@ -608,16 +608,18 @@ void DumpIrIfEnabled(const HloModule& hlo_module,
 
 void DumpIrIfEnabled(mlir::ModuleOp mlir_module, int unique_id,
                      const DebugOptions& debug_options) {
-  absl::string_view module_name = "<unnamed>";
+  absl::optional<absl::string_view> module_name;
   if (llvm::Optional<llvm::StringRef> mlir_module_name =
           mlir_module.getName()) {
     module_name = AsStringView(*mlir_module_name);
   }
-  if (!DumpingEnabledForHloModule(module_name, debug_options)) {
+  if (!DumpingEnabledForHloModule(module_name.value_or("<unnamed>"),
+                                  debug_options)) {
     return;
   }
 
-  DumpToFileInDirOrStdout(debug_options, unique_id, /*file_prefix=*/"",
+  DumpToFileInDirOrStdout(debug_options, unique_id, module_name.value_or(""),
+                          /*file_prefix=*/"",
                           /*file_suffix=*/"lmhlo", DumpToString(mlir_module));
 }
 
@@ -697,15 +699,7 @@ std::pair<llvm::Value*, llvm::Value*> SplitInt64ToInt32s(
   return std::make_pair(low_32bits, high_32bits);
 }
 
-unsigned GetGlobalMemoryAddressSpace(const llvm::Module& module) {
-  const unsigned kAMDGPUGlobalMemoryAddrSpace = 1;
-  llvm::Triple target_triple = llvm::Triple(module.getTargetTriple());
-  if (target_triple.getArch() == llvm::Triple::amdgcn) {
-    // AMDGPU uses 1 for global memory address space.
-    return kAMDGPUGlobalMemoryAddrSpace;
-  }
-  return 0;
-}
+unsigned GetGlobalMemoryAddressSpace() { return 1; }
 
 llvm::GlobalVariable* GetOrCreateVariableForRngState(llvm::Module* module,
                                                      llvm::IRBuilder<>* b) {
@@ -713,7 +707,6 @@ llvm::GlobalVariable* GetOrCreateVariableForRngState(llvm::Module* module,
   llvm::GlobalVariable* state_ptr =
       module->getNamedGlobal(kRngStateVariableName);
   if (!state_ptr) {
-    unsigned global_address_space = GetGlobalMemoryAddressSpace(*module);
     llvm::Type* state_type = b->getInt128Ty();
     // Use a non-zero initial value as zero state can cause the result of the
     // first random number generation not passing the chi-square test. The
@@ -728,7 +721,7 @@ llvm::GlobalVariable* GetOrCreateVariableForRngState(llvm::Module* module,
         /*Name=*/kRngStateVariableName,
         /*InsertBefore=*/nullptr,
         /*TLMode=*/llvm::GlobalValue::NotThreadLocal,
-        /*AddressSpace=*/global_address_space,
+        /*AddressSpace=*/GetGlobalMemoryAddressSpace(),
         /*isExternallyInitialized=*/false);
   }
   return state_ptr;

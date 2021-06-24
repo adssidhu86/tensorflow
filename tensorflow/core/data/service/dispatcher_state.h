@@ -15,14 +15,20 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_DATA_SERVICE_DISPATCHER_STATE_H_
 #define TENSORFLOW_CORE_DATA_SERVICE_DISPATCHER_STATE_H_
 
+#include <memory>
 #include <queue>
+#include <string>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/optional.h"
 #include "tensorflow/core/data/service/common.pb.h"
 #include "tensorflow/core/data/service/data_service.h"
 #include "tensorflow/core/data/service/journal.h"
 #include "tensorflow/core/data/service/journal.pb.h"
-#include "tensorflow/core/lib/core/status.h"
+#include "tensorflow/core/platform/status.h"
 
 namespace tensorflow {
 namespace data {
@@ -138,6 +144,14 @@ class DispatcherState {
 
     bool IsRoundRobin() const { return num_consumers.has_value(); }
 
+    std::string DebugString() const {
+      if (named_job_key.has_value()) {
+        return absl::StrCat(named_job_key.value().name, "_",
+                            named_job_key.value().index);
+      }
+      return absl::StrCat(job_id);
+    }
+
     const int64 job_id;
     const int64 dataset_id;
     const ProcessingMode processing_mode;
@@ -148,6 +162,8 @@ class DispatcherState {
     int64 num_clients = 0;
     int64 last_client_released_micros = -1;
     bool finished = false;
+    // Indicates whether the job was garbage collected.
+    bool garbage_collected = false;
   };
 
   struct Task {
@@ -221,6 +237,7 @@ class DispatcherState {
   void ProduceSplit(const ProduceSplitUpdate& produce_split);
   void AcquireJobClient(const AcquireJobClientUpdate& acquire_job_client);
   void ReleaseJobClient(const ReleaseJobClientUpdate& release_job_client);
+  void GarbageCollectJob(const GarbageCollectJobUpdate& garbage_collect_job);
   void RemoveTask(const RemoveTaskUpdate& remove_task);
   void CreatePendingTask(const CreatePendingTaskUpdate& create_pending_task);
   void ClientHeartbeat(const ClientHeartbeatUpdate& client_heartbeat);

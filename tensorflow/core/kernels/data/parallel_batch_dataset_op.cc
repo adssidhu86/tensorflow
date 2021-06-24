@@ -21,14 +21,14 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/function.h"
 #include "tensorflow/core/common_runtime/input_colocation_exemption_registry.h"
 #include "tensorflow/core/common_runtime/metrics.h"
+#include "tensorflow/core/data/dataset_utils.h"
+#include "tensorflow/core/data/name_utils.h"
+#include "tensorflow/core/data/stats_utils.h"
 #include "tensorflow/core/framework/dataset.h"
 #include "tensorflow/core/framework/model.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/partial_tensor_shape.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "tensorflow/core/kernels/data/dataset_utils.h"
-#include "tensorflow/core/kernels/data/name_utils.h"
-#include "tensorflow/core/kernels/data/stats_utils.h"
 #include "tensorflow/core/lib/gtl/cleanup.h"
 #include "tensorflow/core/platform/env_time.h"
 #include "tensorflow/core/platform/macros.h"
@@ -393,7 +393,7 @@ class ParallelBatchDatasetOp::Dataset : public DatasetBase {
         {
           mutex_lock l(result->mu);
           status = CopyBatch(dataset()->parallel_copy_, ctx.get(),
-                             &result->output, batch_elements.get());
+                             *batch_elements, &result->output);
           result->status.Update(status);
           RecordBufferEnqueue(ctx.get(), result->output);
         }
@@ -519,8 +519,8 @@ class ParallelBatchDatasetOp::Dataset : public DatasetBase {
       result->call_finished = reader->Contains(
           full_name(strings::StrCat(batch_prefix, "_", kCallFinished)));
 
-      TF_RETURN_IF_ERROR(ReadBatch(dataset()->batch_size_, prefix(),
-                                   batch_prefix, ctx, reader, &result->output));
+      TF_RETURN_IF_ERROR(ReadBatch(ctx, reader, dataset()->batch_size_,
+                                   prefix(), batch_prefix, &result->output));
       TF_RETURN_IF_ERROR(ReadStatus(prefix(),
                                     strings::StrCat(batch_prefix, "_", kStatus),
                                     reader, &result->status));

@@ -16,11 +16,11 @@ limitations under the License.
 
 #include "tensorflow/core/common_runtime/device.h"
 #include "tensorflow/core/common_runtime/metrics.h"
+#include "tensorflow/core/data/dataset_utils.h"
+#include "tensorflow/core/data/name_utils.h"
+#include "tensorflow/core/data/stats_utils.h"
 #include "tensorflow/core/framework/stats_aggregator.h"
-#include "tensorflow/core/kernels/data/dataset_utils.h"
-#include "tensorflow/core/kernels/data/name_utils.h"
 #include "tensorflow/core/kernels/data/parallel_map_dataset_op.h"
-#include "tensorflow/core/kernels/data/stats_utils.h"
 #include "tensorflow/core/kernels/ragged_tensor_variant.h"
 #include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/platform/stringprintf.h"
@@ -495,6 +495,7 @@ class ParseExampleDatasetOp : public UnaryDatasetOpKernel {
           for (size_t j = 0; j < num_return_values; j++) {
             result.return_values.emplace_back();
             TF_RETURN_IF_ERROR(reader->ReadTensor(
+                ctx->flr(),
                 full_name(
                     strings::StrCat(kInvocationResults, "[", i, "][", j, "]")),
                 &result.return_values.back()));

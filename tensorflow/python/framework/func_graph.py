@@ -39,7 +39,7 @@ from tensorflow.python.framework import tensor_spec
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.framework import type_spec
 from tensorflow.python.ops import array_ops
-from tensorflow.python.ops import custom_gradient
+from tensorflow.python.ops import handle_data_util
 from tensorflow.python.ops import resource_variable_ops
 from tensorflow.python.ops import tensor_array_ops
 from tensorflow.python.ops import variable_scope
@@ -192,7 +192,7 @@ class FuncGraph(ops.Graph):
     self.inputs = []
     self.outputs = []
     self.control_outputs = []
-    self.control_captures = set()
+    self.control_captures = object_identity.ObjectIdentitySet()
     self.structured_input_signature = None
     self.structured_outputs = None
     self._weak_variables = []
@@ -811,6 +811,7 @@ class FuncGraph(ops.Graph):
     self._scope_exit_callbacks.append(fn)
 
 
+# TODO(mdan): Too many threaded arguments. Accept an ACD ctx manager instead.
 def func_graph_from_py_func(name,
                             python_func,
                             args,
@@ -824,7 +825,8 @@ def func_graph_from_py_func(name,
                             op_return_value=None,
                             collections=None,
                             capture_by_value=None,
-                            override_flat_arg_shapes=None):
+                            override_flat_arg_shapes=None,
+                            acd_record_initial_resource_uses=False):
   """Returns a `FuncGraph` generated from `python_func`.
 
   Args:
@@ -869,6 +871,11 @@ def func_graph_from_py_func(name,
       containing value `None` must match entries in flattened arguments
       containing non-tensors, while entries containing a `TensorShape` must
       match entries in the flattened arguments containing tensors.
+    acd_record_initial_resource_uses: If `True` and `add_control_dependencies`
+      is enabled, the results (those marked with
+      AutomaticControlDependencies.mark_result) will be annotated with a private
+      attribute, "_res_first_used_by", which points to the first nodes which
+      used the any of the resources that the result op is using.
 
   Returns:
     A FuncGraph.
@@ -886,7 +893,8 @@ def func_graph_from_py_func(name,
                            capture_by_value=capture_by_value)
   assert isinstance(func_graph, FuncGraph)
   if add_control_dependencies:
-    deps_control_manager = auto_control_deps.AutomaticControlDependencies()
+    deps_control_manager = auto_control_deps.AutomaticControlDependencies(
+        record_initial_resource_uses=acd_record_initial_resource_uses)
   else:
     deps_control_manager = ops.NullContextmanager()
 
@@ -1142,7 +1150,7 @@ def _create_substitute_placeholder(value, name=None, dtype=None, shape=None):
   with ops.control_dependencies(None):
     placeholder = graph_placeholder(
         dtype=dtype or value.dtype, shape=shape, name=name)
-  custom_gradient.copy_handle_data(value, placeholder)
+  handle_data_util.copy_handle_data(value, placeholder)
   return placeholder
 
 
@@ -1229,7 +1237,7 @@ def _get_defun_inputs(args, names, structure, flat_shapes=None):
           # unnamed placeholders.
           placeholder = graph_placeholder(arg.dtype, placeholder_shape)
         if not arg_is_spec:
-          custom_gradient.copy_handle_data(arg, placeholder)
+          handle_data_util.copy_handle_data(arg, placeholder)
         if name is not None:
           # Record the requested/user-specified name in case it's different than
           # the uniquified name, for validation when exporting signatures.

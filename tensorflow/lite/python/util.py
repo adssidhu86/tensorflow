@@ -751,8 +751,8 @@ def _modify_model_output_type(model, inference_output_type=dtypes.float32):
   output_dequant_ops = []
   for op in operators:
     # Find operators that dequantize model output
-    if op.opcodeIndex in dequant_opcode_idxs and \
-        op.outputs[0] in subgraph.outputs:
+    if (op.opcodeIndex in dequant_opcode_idxs and
+        op.outputs[0] in subgraph.outputs):
       # If found, validate that the operator's output type is float
       quant_tensor, float_tensor = tensors[op.inputs[0]], tensors[op.outputs[0]]
       float_type = _convert_tflite_enum_type_to_tf_type(float_tensor.type)
@@ -861,8 +861,8 @@ def _remove_redundant_quantize_ops(model):
       # This is a requantize op, so write down its input tensor index.
       if input_type != dtypes.float32 and output_type != dtypes.float32:
         redundant_quant_tensors[op.inputs[0]] = op
-    if op.opcodeIndex in dequant_opcode_idxs and \
-        op.outputs[0] in subgraph.outputs:
+    if (op.opcodeIndex in dequant_opcode_idxs and
+        op.outputs[0] in subgraph.outputs):
       output_dequant_tensors[op.inputs[0]] = op
 
   # Remove all the quant ops which produce the redundant quant tensors.
@@ -870,6 +870,11 @@ def _remove_redundant_quantize_ops(model):
     output_tensor_idx = op.outputs[0]
     if output_tensor_idx in redundant_quant_tensors:
       requantize_op = redundant_quant_tensors[output_tensor_idx]
+      if model.signatureDefs:
+        signature_def = model.signatureDefs[0]
+        for output in signature_def.outputs:
+          if output.tensorIndex == op.outputs[0]:
+            output.tensorIndex = op.inputs[0]
       # Reset the input of the requantize op to the float input
       requantize_op.inputs[0] = op.inputs[0]
       operators.remove(op)
@@ -880,6 +885,11 @@ def _remove_redundant_quantize_ops(model):
     if output_tensor_idx in output_dequant_tensors:
       dequant_op = output_dequant_tensors[output_tensor_idx]
       subgraph.outputs[subgraph.outputs == dequant_op.outputs[0]] = op.inputs[0]
+      if model.signatureDefs:
+        signature_def = model.signatureDefs[0]
+        for output in signature_def.outputs:
+          if output.tensorIndex == dequant_op.outputs[0]:
+            output.tensorIndex = op.inputs[0]
       operators.remove(op)
       operators.remove(dequant_op)
 
@@ -909,8 +919,8 @@ def modify_model_io_type(
     RuntimeError: If the modification was unsuccessful.
 
   """
-  if inference_input_type == dtypes.float32 and \
-      inference_output_type == dtypes.float32:
+  if (inference_input_type == dtypes.float32 and
+      inference_output_type == dtypes.float32):
     return model
 
   model_object = _convert_model_from_bytearray_to_object(model)

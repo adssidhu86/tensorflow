@@ -1042,6 +1042,25 @@ def to_float(x, name="ToFloat"):
 
   Raises:
     TypeError: If `x` cannot be cast to the `float32`.
+
+  @compatibility(TF2)
+
+  This name was deprecated and removed in TF2, but has an exact replacement
+  `tf.cast(..., tf.float32)`. There are no further issues with eager execution
+  or tf.function.
+
+  Before:
+
+  >>> tf.compat.v1.to_float(tf.constant(3.14, dtype=tf.double))
+  <tf.Tensor: shape=(), dtype=float32, numpy=3.14>
+
+  After:
+
+  >>> tf.cast(tf.constant(3.14, dtype=tf.double), tf.float32)
+  <tf.Tensor: shape=(), dtype=float32, numpy=3.14>
+
+  @end_compatibility
+
   """
   return cast(x, dtypes.float32, name=name)
 
@@ -1062,6 +1081,25 @@ def to_double(x, name="ToDouble"):
 
   Raises:
     TypeError: If `x` cannot be cast to the `float64`.
+
+  @compatibility(TF2)
+
+  This name was deprecated and removed in TF2, but has an exact replacement
+  `tf.cast(..., tf.double)`. There are no further issues with eager execution or
+  tf.function.
+
+  Before:
+
+  >>> tf.compat.v1.to_double(tf.constant(3.14, dtype=tf.float32))
+  <tf.Tensor: shape=(), dtype=float64, numpy=3.14>
+
+  After:
+
+  >>> tf.cast(tf.constant(3.14, dtype=tf.float32), tf.double)
+  <tf.Tensor: shape=(), dtype=float64, numpy=3.14>
+
+  @end_compatibility
+
   """
   return cast(x, dtypes.float64, name=name)
 
@@ -1082,6 +1120,25 @@ def to_int32(x, name="ToInt32"):
 
   Raises:
     TypeError: If `x` cannot be cast to the `int32`.
+
+  @compatibility(TF2)
+
+  This name was deprecated and removed in TF2, but has an exact replacement
+  `tf.cast(..., tf.int32)`. There are no further issues with eager execution or
+  tf.function.
+
+  Before:
+
+  >>> tf.compat.v1.to_int32(tf.constant(1, dtype=tf.int64))
+  <tf.Tensor: shape=(), dtype=int32, numpy=1>
+
+  After:
+
+  >>> tf.cast(tf.constant(1, dtype=tf.int64), tf.int32)
+  <tf.Tensor: shape=(), dtype=int32, numpy=1>
+
+  @end_compatibility
+
   """
   return cast(x, dtypes.int32, name=name)
 
@@ -1102,6 +1159,25 @@ def to_int64(x, name="ToInt64"):
 
   Raises:
     TypeError: If `x` cannot be cast to the `int64`.
+
+  @compatibility(TF2)
+
+  This name was deprecated and removed in TF2, but has an exact replacement
+  `tf.cast(..., tf.int64)`. There are no further issues with eager execution or
+  tf.function.
+
+  Before:
+
+  >>> tf.compat.v1.to_int64(tf.constant(1, dtype=tf.int32))
+  <tf.Tensor: shape=(), dtype=int64, numpy=1>
+
+  After:
+
+  >>> tf.cast(tf.constant(1, dtype=tf.int32), tf.int64)
+  <tf.Tensor: shape=(), dtype=int64, numpy=1>
+
+  @end_compatibility
+
   """
   return cast(x, dtypes.int64, name=name)
 
@@ -1122,6 +1198,25 @@ def to_bfloat16(x, name="ToBFloat16"):
 
   Raises:
     TypeError: If `x` cannot be cast to the `bfloat16`.
+
+  @compatibility(TF2)
+
+  This name was deprecated and removed in TF2, but has an exact replacement
+  `tf.cast(..., tf.bfloat16)`. There are no further issues with eager execution
+  or tf.function.
+
+  Before:
+
+  >>> tf.compat.v1.to_bfloat16(tf.constant(3.14, dtype=tf.float32))
+  <tf.Tensor: shape=(), dtype=bfloat16, numpy=3.14>
+
+  After:
+
+  >>> tf.cast(tf.constant(3.14, dtype=tf.float32), tf.bfloat16)
+  <tf.Tensor: shape=(), dtype=bfloat16, numpy=3.14>
+
+  @end_compatibility
+
   """
   return cast(x, dtypes.bfloat16, name=name)
 
@@ -1142,6 +1237,25 @@ def to_complex64(x, name="ToComplex64"):
 
   Raises:
     TypeError: If `x` cannot be cast to the `complex64`.
+
+  @compatibility(TF2)
+
+  This name was deprecated and removed in TF2, but has an exact replacement
+  `tf.cast(..., tf.complex64)`. There are no further issues with eager execution
+  or tf.function.
+
+  Before:
+
+  >>> tf.compat.v1.to_complex64(tf.constant(1. + 2.j, dtype=tf.complex128))
+  <tf.Tensor: shape=(), dtype=complex64, numpy=(1+2j)>
+
+  After:
+
+  >>> tf.cast(tf.constant(1. + 2.j, dtype=tf.complex128), tf.complex64)
+  <tf.Tensor: shape=(), dtype=complex64, numpy=(1+2j)>
+
+  @end_compatibility
+
   """
   return cast(x, dtypes.complex64, name=name)
 
@@ -1162,6 +1276,25 @@ def to_complex128(x, name="ToComplex128"):
 
   Raises:
     TypeError: If `x` cannot be cast to the `complex128`.
+
+  @compatibility(TF2)
+
+  This name was deprecated and removed in TF2, but has an exact replacement
+  `tf.cast(..., tf.complex128)`. There are no further issues with eager
+  execution or tf.function.
+
+  Before:
+
+  >>> tf.compat.v1.to_complex128(tf.constant(1. + 2.j, dtype=tf.complex64))
+  <tf.Tensor: shape=(), dtype=complex128, numpy=(1+2j)>
+
+  After:
+
+  >>> tf.cast(tf.constant(1. + 2.j, dtype=tf.complex64), tf.complex128)
+  <tf.Tensor: shape=(), dtype=complex128, numpy=(1+2j)>
+
+  @end_compatibility
+
   """
   return cast(x, dtypes.complex128, name=name)
 
@@ -1292,7 +1425,9 @@ _TRUEDIV_TABLE = {
     dtypes.int8: dtypes.float32,
     dtypes.uint16: dtypes.float32,
     dtypes.int16: dtypes.float32,
+    dtypes.uint32: dtypes.float64,
     dtypes.int32: dtypes.float64,
+    dtypes.uint64: dtypes.float64,
     dtypes.int64: dtypes.float64,
     dtypes.bfloat16: None,
     dtypes.float16: None,
@@ -2494,6 +2629,7 @@ def reduce_variance(input_tensor, axis=None, keepdims=False, name=None):
   """
   name = name if name else "reduce_variance"
   with ops.name_scope(name):
+    input_tensor = ops.convert_to_tensor(input_tensor)
     means = reduce_mean(input_tensor, axis=axis, keepdims=True)
     if means.dtype.is_integer:
       raise TypeError("Input must be either real or complex")
@@ -2555,6 +2691,7 @@ def reduce_std(input_tensor, axis=None, keepdims=False, name=None):
   """
   name = name if name else "reduce_std"
   with ops.name_scope(name):
+    input_tensor = ops.convert_to_tensor(input_tensor)
     variance = reduce_variance(input_tensor, axis=axis, keepdims=keepdims)
     return gen_math_ops.sqrt(variance)
 
@@ -3314,7 +3451,8 @@ def matmul(a,
   and any further outer dimensions specify matching batch size.
 
   Both matrices must be of the same type. The supported types are:
-  `float16`, `float32`, `float64`, `int32`, `complex64`, `complex128`.
+  `bfloat16`, `float16`, `float32`, `float64`, `int32`, `int64`,
+  `complex64`, `complex128`.
 
   Either matrix can be transposed or adjointed (conjugated and transposed) on
   the fly by setting one of the corresponding flag to `True`. These are `False`
@@ -3401,7 +3539,7 @@ def matmul(a,
       for some support for `tf.sparse.SparseTensor` multiplication.
     output_type: The output datatype if needed. Defaults to None in which case
       the output_type is the same as input type. Currently only works when input
-      tensors are type int8 and output_type can be int32.
+      tensors are type (u)int8 and output_type can be int32.
     name: Name for the operation (optional).
 
   Returns:
@@ -3419,7 +3557,7 @@ def matmul(a,
     ValueError: If `transpose_a` and `adjoint_a`, or `transpose_b` and
       `adjoint_b` are both set to `True`.
     TypeError: If output_type is specified but the types of `a`, `b` and
-      `output_type` is not int8, int8 and int32.
+      `output_type` is not (u)int8, (u)int8 and int32.
   """
 
   with ops.name_scope(name, "MatMul", [a, b]) as name:
@@ -3484,9 +3622,10 @@ def matmul(a,
       sparse_matmul_types = [dtypes.bfloat16, dtypes.float32]
       use_sparse_matmul = (
           a.dtype in sparse_matmul_types and b.dtype in sparse_matmul_types)
-    if (((a.dtype == dtypes.bfloat16 and b.dtype != dtypes.int8) or
-         (b.dtype == dtypes.bfloat16 and a.dtype != dtypes.int8)) and
-        a.dtype != b.dtype):
+    if (((a.dtype == dtypes.bfloat16 and
+          b.dtype not in (dtypes.int8, dtypes.uint8)) or
+         (b.dtype == dtypes.bfloat16 and
+          a.dtype not in (dtypes.int8, dtypes.uint8))) and a.dtype != b.dtype):
       # matmul currently doesn't handle mixed-precision inputs other than
       # fp16 * int8 which is supported in BatchMatMulV3.
       use_sparse_matmul = True
@@ -3724,6 +3863,86 @@ def _as_indexed_slices_list(inputs, optimize=True):
   return casted_outputs
 
 
+@tf_export("math.add", "add")
+@dispatch.add_dispatch_support
+def add(x, y, name=None):
+  """Returns x + y element-wise.
+
+  Example usages below.
+
+  Add a scalar and a list:
+
+  >>> x = [1, 2, 3, 4, 5]
+  >>> y = 1
+  >>> tf.add(x, y)
+  <tf.Tensor: shape=(5,), dtype=int32, numpy=array([2, 3, 4, 5, 6],
+  dtype=int32)>
+
+  Note that binary `+` operator can be used instead:
+
+  >>> x = tf.convert_to_tensor([1, 2, 3, 4, 5])
+  >>> y = tf.convert_to_tensor(1)
+  >>> x + y
+  <tf.Tensor: shape=(5,), dtype=int32, numpy=array([2, 3, 4, 5, 6],
+  dtype=int32)>
+
+  Add a tensor and a list of same shape:
+
+  >>> x = [1, 2, 3, 4, 5]
+  >>> y = tf.constant([1, 2, 3, 4, 5])
+  >>> tf.add(x, y)
+  <tf.Tensor: shape=(5,), dtype=int32,
+  numpy=array([ 2,  4,  6,  8, 10], dtype=int32)>
+
+  **Warning**: If one of the inputs (`x` or `y`) is a tensor and the other is a
+  non-tensor, the non-tensor input will adopt (or get casted to) the data type
+  of the tensor input. This can potentially cause unwanted overflow or underflow
+  conversion.
+
+  For example,
+
+  >>> x = tf.constant([1, 2], dtype=tf.int8)
+  >>> y = [2**7 + 1, 2**7 + 2]
+  >>> tf.add(x, y)
+  <tf.Tensor: shape=(2,), dtype=int8, numpy=array([-126, -124], dtype=int8)>
+
+  When adding two input values of different shapes, `Add` follows NumPy
+  broadcasting rules. The two input array shapes are compared element-wise.
+  Starting with the trailing dimensions, the two dimensions either have to be
+  equal or one of them needs to be `1`.
+
+  For example,
+
+  >>> x = np.ones(6).reshape(1, 2, 1, 3)
+  >>> y = np.ones(6).reshape(2, 1, 3, 1)
+  >>> tf.add(x, y).shape.as_list()
+  [2, 2, 3, 3]
+
+  Another example with two arrays of different dimension.
+
+  >>> x = np.ones([1, 2, 1, 4])
+  >>> y = np.ones([3, 4])
+  >>> tf.add(x, y).shape.as_list()
+  [1, 2, 3, 4]
+
+  The reduction version of this elementwise operation is `tf.math.reduce_sum`
+
+  Args:
+    x: A `tf.Tensor`. Must be one of the following types: bfloat16, half,
+      float32, float64, uint8, int8, int16, int32, int64, complex64, complex128,
+      string.
+    y: A `tf.Tensor`. Must have the same type as x.
+    name: A name for the operation (optional)
+  """
+  with ops.name_scope(name, "Add", [x]) as name:
+    x = ops.convert_to_tensor(x, name="x")
+    y = ops.convert_to_tensor(y, dtype_hint=x.dtype.base_dtype, name="y")
+    if x.dtype == dtypes.string:
+      return gen_math_ops.add(x, y, name=name)
+    else:
+      return gen_math_ops.add_v2(x, y, name=name)
+
+
 @tf_export("math.add_n", "add_n")
 @dispatch.add_dispatch_support
 def add_n(inputs, name=None):
@@ -3953,7 +4172,7 @@ def log_sigmoid(x, name=None):
   """
   with ops.name_scope(name, "LogSigmoid", [x]) as name:
     x = ops.convert_to_tensor(x, name="x")
-    return gen_math_ops.neg(gen_nn_ops.softplus(-x), name=name)
+    return gen_math_ops.neg(gen_nn_ops.softplus(-x), name=name)  # pylint: disable=invalid-unary-operand-type
 
 
 @tf_export("math.cumsum", "cumsum")

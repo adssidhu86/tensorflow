@@ -36,6 +36,10 @@ tf_class {
     argspec: "args=[\'self\', \'batch_size\', \'drop_remainder\', \'num_parallel_calls\', \'deterministic\'], varargs=None, keywords=None, defaults=[\'False\', \'None\', \'None\'], "
   }
   member_method {
+    name: "bucket_by_sequence_length"
+    argspec: "args=[\'self\', \'element_length_func\', \'bucket_boundaries\', \'bucket_batch_sizes\', \'padded_shapes\', \'padding_values\', \'pad_to_bucket_boundary\', \'no_padding\', \'drop_remainder\'], varargs=None, keywords=None, defaults=[\'None\', \'None\', \'False\', \'False\', \'False\'], "
+  }
+  member_method {
     name: "cache"
     argspec: "args=[\'self\', \'filename\'], varargs=None, keywords=None, defaults=[\'\'], "
   }
@@ -124,6 +128,10 @@ tf_class {
     argspec: "args=[\'self\', \'buffer_size\'], varargs=None, keywords=None, defaults=None"
   }
   member_method {
+    name: "random"
+    argspec: "args=[\'seed\'], varargs=None, keywords=None, defaults=[\'None\'], "
+  }
+  member_method {
     name: "range"
     argspec: "args=[], varargs=args, keywords=kwargs, defaults=None"
   }
@@ -134,6 +142,10 @@ tf_class {
   member_method {
     name: "repeat"
     argspec: "args=[\'self\', \'count\'], varargs=None, keywords=None, defaults=[\'None\'], "
+  }
+  member_method {
+    name: "scan"
+    argspec: "args=[\'self\', \'initial_state\', \'scan_func\'], varargs=None, keywords=None, defaults=None"
   }
   member_method {
     name: "shard"
@@ -148,11 +160,23 @@ tf_class {
     argspec: "args=[\'self\', \'count\'], varargs=None, keywords=None, defaults=None"
   }
   member_method {
+    name: "snapshot"
+    argspec: "args=[\'self\', \'path\', \'compression\', \'reader_func\', \'shard_func\'], varargs=None, keywords=None, defaults=[\'AUTO\', \'None\', \'None\'], "
+  }
+  member_method {
     name: "take"
     argspec: "args=[\'self\', \'count\'], varargs=None, keywords=None, defaults=None"
   }
   member_method {
+    name: "take_while"
+    argspec: "args=[\'self\', \'predicate\'], varargs=None, keywords=None, defaults=None"
+  }
+  member_method {
     name: "unbatch"
+    argspec: "args=[\'self\'], varargs=None, keywords=None, defaults=None"
+  }
+  member_method {
+    name: "unique"
     argspec: "args=[\'self\'], varargs=None, keywords=None, defaults=None"
   }
   member_method {

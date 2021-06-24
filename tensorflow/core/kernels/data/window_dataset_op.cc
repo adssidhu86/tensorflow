@@ -14,8 +14,8 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/kernels/data/window_dataset_op.h"
 
+#include "tensorflow/core/data/name_utils.h"
 #include "tensorflow/core/framework/dataset.h"
-#include "tensorflow/core/kernels/data/name_utils.h"
 #include "tensorflow/core/kernels/data/window_dataset.h"
 #include "tensorflow/core/platform/stringprintf.h"
 
@@ -310,6 +310,7 @@ class WindowDatasetOp::Dataset : public DatasetBase {
         buffer_[i].result.resize(vector_size);
         for (int64 j = 0; j < vector_size; j++) {
           TF_RETURN_IF_ERROR(reader->ReadTensor(
+              ctx->flr(),
               full_name(strings::StrCat(kBuffer, "[", i, "][", j, "]")),
               &buffer_[i].result[j]));
         }

@@ -495,36 +495,6 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
     self.assertDatasetProduces(dataset, list(chunk(expected, 5)))
 
   @combinations.generate(test_base.default_test_combinations())
-  def testMaxIntraOpParallelism(self):
-    dataset = dataset_ops.Dataset.list_files(self._filenames, shuffle=False)
-    dataset = dataset.flat_map(core_readers.TFRecordDataset)
-    dataset = dataset.batch(5)
-    dataset = dataset_ops._MaxIntraOpParallelismDataset(dataset, 1)
-    dataset = distribute._AutoShardDataset(dataset, 5, 0)
-
-    expected = [
-        b"Record %d of file %d" % (r, f)  # pylint:disable=g-complex-comprehension
-        for f in (0, 5)
-        for r in range(0, 10)
-    ]
-    self.assertDatasetProduces(dataset, list(chunk(expected, 5)))
-
-  @combinations.generate(test_base.default_test_combinations())
-  def testPrivateThreadpool(self):
-    dataset = dataset_ops.Dataset.list_files(self._filenames, shuffle=False)
-    dataset = dataset.flat_map(core_readers.TFRecordDataset)
-    dataset = dataset.batch(5)
-    dataset = dataset_ops._PrivateThreadPoolDataset(dataset, 1)
-    dataset = distribute._AutoShardDataset(dataset, 5, 0)
-
-    expected = [
-        b"Record %d of file %d" % (r, f)  # pylint:disable=g-complex-comprehension
-        for f in (0, 5)
-        for r in range(0, 10)
-    ]
-    self.assertDatasetProduces(dataset, list(chunk(expected, 5)))
-
-  @combinations.generate(test_base.default_test_combinations())
   def testMakeBatchedFeaturesDataset(self):
     files = 2
     records_per_file = 5
@@ -684,8 +654,10 @@ class AutoShardDatasetCheckpointTest(tf_record_test_base.TFRecordTestBase,
     self._num_records = 10
     self._filenames = self._createFiles()
 
-  @combinations.generate(test_base.default_test_combinations())
-  def testCore(self):
+  @combinations.generate(
+      combinations.times(test_base.default_test_combinations(),
+                         checkpoint_test_base.default_test_combinations()))
+  def test(self, verify_fn):
 
     def build_dataset():
       dataset = dataset_ops.Dataset.list_files(self._filenames, shuffle=False)
@@ -694,7 +666,7 @@ class AutoShardDatasetCheckpointTest(tf_record_test_base.TFRecordTestBase,
       dataset = distribute._AutoShardDataset(dataset, 5, 3)
       return dataset
 
-    self.run_core_tests(build_dataset, 20)
+    verify_fn(self, build_dataset, num_outputs=20)
 
 
 if __name__ == "__main__":
