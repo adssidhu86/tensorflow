@@ -443,6 +443,7 @@ tf_cuda_library(
     copts = if_cuda_is_configured(["-DGOOGLE_CUDA=1"]) + if_nccl(["-DGOOGLE_XCCL=1"]),
     deps = [
         ":buffer_allocations",
+        ":ir_emission_utils",
         ":thunk",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -461,6 +462,7 @@ tf_cuda_library(
         "//tensorflow/compiler/xla:xla_data_proto_cc",
         "//tensorflow/core:lib",
         "//tensorflow/compiler/mlir/hlo:lhlo",
+        "//tensorflow/compiler/mlir/hlo:lhlo_gpu",
         "//tensorflow/compiler/mlir/xla:hlo_utils",
         "//tensorflow/compiler/mlir/xla:type_to_shape",
         "//tensorflow/compiler/mlir/xla:attribute_exporter",
@@ -560,7 +562,6 @@ cc_library(
     name = "gpu_executable",
     srcs = [
         "bef_thunk.cc",
-        "collective_permute_thunk.cc",
         "conditional_thunk.cc",
         "convolution_thunk.cc",
         "copy_thunk.cc",
@@ -583,7 +584,6 @@ cc_library(
     ]),
     hdrs = [
         "bef_thunk.h",
-        "collective_permute_thunk.h",
         "conditional_thunk.h",
         "convolution_thunk.h",
         "copy_thunk.h",
@@ -607,6 +607,8 @@ cc_library(
     ]),
     local_defines = if_cuda_is_configured([
         "GOOGLE_CUDA=1",
+    ]) + if_nccl([
+        "GOOGLE_XCCL=1",
     ]) + select({
         ":is_bef_thunk_enabled": ["BEF_THUNKS=1"],
         "//conditions:default": [],
@@ -685,12 +687,17 @@ cc_library(
         "@local_config_rocm//rocm:rocm_headers",
     ]) + select({
         ":is_bef_thunk_enabled": [
+            ":virtual_nccl",
+            ":virtual_nccl_utils",
+            ":virtual_rccl",
             "@llvm-project//llvm:Support",
             "@llvm-project//mlir:GPUTransforms",
             "@llvm-project//mlir:Pass",
             "//tensorflow/compiler/mlir/hlo:lhlo",
             # copybara:uncomment_begin(target not open-sourced yet)
             # "//tensorflow/compiler/mlir/tfrt/transforms/lhlo_gpu_to_tfrt_gpu:pass",
+            # "//tensorflow/compiler/mlir/xla:attribute_exporter",
+            # "//tensorflow/compiler/xla/service:collective_ops_utils",
             # "//tensorflow/core/tfrt/gpu:gpu_shared_context",
             # "//tensorflow/core/tfrt/runtime:work_queue_interface",
             # copybara:uncomment_end
@@ -1373,6 +1380,7 @@ cc_library(
         ":cudnn_batchnorm_rewriter",
         ":fusion_merger",
         ":gemm_rewriter",
+        ":gpu_all_reduce_scatter_creator",
         ":gpu_constants",
         ":gpu_conv_algorithm_picker",
         ":gpu_copy_insertion",
@@ -1410,12 +1418,15 @@ cc_library(
         "//tensorflow/compiler/xla:types",
         "//tensorflow/compiler/xla:util",
         "//tensorflow/compiler/xla/service:algebraic_simplifier",
+        "//tensorflow/compiler/xla/service:all_gather_broadcast_reorder",
         "//tensorflow/compiler/xla/service:all_gather_combiner",
         "//tensorflow/compiler/xla/service:all_gather_decomposer",
         "//tensorflow/compiler/xla/service:all_reduce_combiner",
+        "//tensorflow/compiler/xla/service:all_reduce_reassociate",
         "//tensorflow/compiler/xla/service:all_to_all_decomposer",
         "//tensorflow/compiler/xla/service:async_all_reduce_creator",
         "//tensorflow/compiler/xla/service:batchnorm_expander",
+        "//tensorflow/compiler/xla/service:bfloat16_normalization",
         "//tensorflow/compiler/xla/service:buffer_assignment",
         "//tensorflow/compiler/xla/service:call_inliner",
         "//tensorflow/compiler/xla/service:collectives_schedule_linearizer",
@@ -1436,7 +1447,6 @@ cc_library(
         "//tensorflow/compiler/xla/service:hlo_cse",
         "//tensorflow/compiler/xla/service:hlo_dataflow_analysis",
         "//tensorflow/compiler/xla/service:hlo_dce",
-        "//tensorflow/compiler/xla/service:hlo_element_type_converter",
         "//tensorflow/compiler/xla/service:hlo_parser",
         "//tensorflow/compiler/xla/service:hlo_pass",
         "//tensorflow/compiler/xla/service:hlo_pass_pipeline",
@@ -1449,6 +1459,7 @@ cc_library(
         "//tensorflow/compiler/xla/service:operand_upcaster",
         "//tensorflow/compiler/xla/service:qr_expander",
         "//tensorflow/compiler/xla/service:real_imag_expander",
+        "//tensorflow/compiler/xla/service:reduce_scatter_combiner",
         "//tensorflow/compiler/xla/service:reshape_mover",
         "//tensorflow/compiler/xla/service:result_caster",
         "//tensorflow/compiler/xla/service:rng_bit_generator_expander",
@@ -1586,13 +1597,13 @@ cc_library(
 
 cc_library(
     name = "amdgpu_compiler_impl",
-    srcs = [
+    srcs = if_rocm_is_configured([
         "amdgpu_compiler.cc",
-    ],
-    hdrs = [
+    ]),
+    hdrs = if_rocm_is_configured([
         "amdgpu_compiler.h",
-    ],
-    deps = [
+    ]),
+    deps = if_rocm_is_configured([
         ":cusolver_rewriter",
         ":gemm_rewriter",
         ":gpu_compiler",
@@ -1617,7 +1628,7 @@ cc_library(
         "//tensorflow/compiler/xla/service/gpu/llvm_gpu_backend",
         "//tensorflow/compiler/xla/service/llvm_ir:llvm_util",
         "//tensorflow/core/platform:rocm_rocdl_path",
-    ],
+    ]),
 )
 
 cc_library(

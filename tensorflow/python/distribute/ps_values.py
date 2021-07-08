@@ -21,11 +21,14 @@ from __future__ import print_function
 import copy
 import weakref
 
+import numpy as np
+
 from tensorflow.python.distribute import distribute_lib
 from tensorflow.python.distribute import distribute_utils
 from tensorflow.python.distribute import distribution_strategy_context as ds_context
 from tensorflow.python.distribute import values
 from tensorflow.python.distribute import values_util
+from tensorflow.python.eager import context
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import variable_scope as vs
@@ -200,6 +203,8 @@ class AggregatingVariable(variables_lib.Variable, core.Tensor):
 
   # TODO(josh11b): Test saving & restoring.
   def _gather_saveables_for_checkpoint(self):
+    if isinstance(self._v, CachingVariable):
+      return self._v._gather_saveables_for_checkpoint()  # pylint:disable=protected-access
     return {trackable.VARIABLE_VALUE_KEY: self._v}
 
   def _map_resources(self, save_options):
@@ -395,6 +400,8 @@ class CachingVariable(variables_lib.Variable, core.Tensor):
     return self._v.op
 
   def value(self):
+    if distribute_utils.caching_scope_local.in_caching_scope():
+      return self.cached_read_value()
     return self._v.value()
 
   def eval(self, session=None):
@@ -432,6 +439,25 @@ class CachingVariable(variables_lib.Variable, core.Tensor):
   def constraint(self):
     return self._v.constraint
 
+  def __array__(self):
+    return np.asarray(self.numpy())
+
+  def __complex__(self):
+    return complex(self.value().numpy())
+
+  def __int__(self):
+    return int(self.value().numpy())
+
+  def __float__(self):
+    return float(self.value().numpy())
+
+  def numpy(self):
+    if context.executing_eagerly():
+      return self.read_value().numpy()
+    else:
+      raise NotImplementedError(
+          "numpy() is only available when eager execution is enabled.")
+
   def __str__(self):
     return str(self._v)
 
@@ -443,8 +469,10 @@ class CachingVariable(variables_lib.Variable, core.Tensor):
     pass
 
   def _dense_var_to_tensor(self, dtype=None, name=None, as_ref=False):
-    return ops.convert_to_tensor(self.get(), dtype=dtype, name=name,
-                                 as_ref=as_ref)
+    if distribute_utils.caching_scope_local.in_caching_scope():
+      return self.cached_read_value()
+    return ops.convert_to_tensor(
+        self.get(), dtype=dtype, name=name, as_ref=as_ref)
 
   @classmethod
   def _overload_overloadable_operators(cls):

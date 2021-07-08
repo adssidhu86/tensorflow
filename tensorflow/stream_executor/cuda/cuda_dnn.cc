@@ -81,7 +81,7 @@ static_assert(CUDNN_VERSION >= 7300, "cuDNN needs to be version 7.3 or higher");
       std::ostringstream oss;                                            \
       oss << ToString(_status) << "\nin " << __FILE__ << "(" << __LINE__ \
           << "): '" << #expr << "'";                                     \
-      return port::Status(port::error::UNKNOWN, oss.str().c_str());      \
+      return port::Status(port::error::UNKNOWN, oss.str());              \
     }                                                                    \
   } while (false)
 
@@ -92,19 +92,15 @@ static_assert(CUDNN_VERSION >= 7300, "cuDNN needs to be version 7.3 or higher");
       std::ostringstream oss;                                            \
       oss << ToString(_status) << "\nin " << __FILE__ << "(" << __LINE__ \
           << "): '" << #expr << "' " << expr.get_error();                \
-      return port::Status(port::error::UNKNOWN, oss.str().c_str());      \
+      return port::Status(port::error::UNKNOWN, oss.str());              \
     }                                                                    \
   } while (false)
 
-#define RETURN_FALSE_IF_CUDNN_ERROR(expr)                                \
-  do {                                                                   \
-    cudnnStatus_t _status = expr.get_status();                           \
-    if (!SE_PREDICT_TRUE(_status == CUDNN_STATUS_SUCCESS)) {             \
-      std::ostringstream oss;                                            \
-      oss << ToString(_status) << "\nin " << __FILE__ << "(" << __LINE__ \
-          << "): '" << #expr << "' " << expr.get_error();                \
-      return false;                                                      \
-    }                                                                    \
+#define RETURN_FALSE_IF_CUDNN_ERROR(expr)                              \
+  do {                                                                 \
+    if (!SE_PREDICT_TRUE(expr.get_status() == CUDNN_STATUS_SUCCESS)) { \
+      return false;                                                    \
+    }                                                                  \
   } while (false)
 
 // Converts (via narrowing) a type T value to a type U, and checks that the
@@ -965,6 +961,10 @@ cudnnDataType_t ToCudnnDataType(
       }
     case dnn::DataType::kInt32:
       return CUDNN_DATA_INT32;
+#if CUDNN_VERSION >= 8200
+    case dnn::DataType::kBF16:
+      return CUDNN_DATA_BFLOAT16;
+#endif
     default:
       LOG(FATAL) << "Invalid DNN data type: " << static_cast<int>(data_type);
   }
@@ -1526,8 +1526,7 @@ class CudnnRnnSequenceTensorDescriptor
         data_type_(data_type),
         handle_(std::move(handle)),
         rnn_data_handle_(std::move(data_handle)),
-        handles_(max_seq_length, handle_.get()) {
-  }
+        handles_(max_seq_length, handle_.get()) {}
 
  public:
   CudnnRnnSequenceTensorDescriptor(CudnnRnnSequenceTensorDescriptor&&) =
@@ -1547,8 +1546,7 @@ class CudnnRnnSequenceTensorDescriptor
         /*nbDims=*/sizeof(dims) / sizeof(dims[0]), /*dimA=*/dims,
         /*strideA=*/strides));
     return CudnnRnnSequenceTensorDescriptor(parent, max_seq_length, batch_size,
-                                            data_size, data_type,
-                                            nullptr,
+                                            data_size, data_type, nullptr,
                                             std::move(tensor_desc));
   }
 
@@ -1595,9 +1593,7 @@ class CudnnRnnSequenceTensorDescriptor
   int max_seq_length() const { return max_seq_length_; }
   int batch_size() const { return batch_size_; }
   int data_size() const { return data_size_; }
-  bool is_var_seq_lengths() const {
-    return rnn_data_handle_ != nullptr;
-  }
+  bool is_var_seq_lengths() const { return rnn_data_handle_ != nullptr; }
 
  private:
   int max_seq_length_;
@@ -3092,9 +3088,10 @@ port::StatusOr<dnn::AlgorithmDesc> GetCudnnConvolutionBackwardFilterAlgorithm(
     algo_desc = dnn::AlgorithmDesc(algo, use_tensor_ops);
   }
 
-  auto scratch_or = AllocateCudnnConvolutionBackwardFilterWorkspace(
-      stream, cudnn, input_nd, filter, conv, output_nd, *algo_desc,
-      scratch_allocator);
+  port::StatusOr<DeviceMemory<uint8>> scratch_or =
+      AllocateCudnnConvolutionBackwardFilterWorkspace(
+          stream, cudnn, input_nd, filter, conv, output_nd, *algo_desc,
+          scratch_allocator);
 
   if (scratch_or.ok()) {
     *scratch = scratch_or.ValueOrDie();
@@ -3108,8 +3105,10 @@ port::StatusOr<dnn::AlgorithmDesc> GetCudnnConvolutionBackwardFilterAlgorithm(
   if (!algo_desc.has_value()) {
     return port::Status(
         port::error::INVALID_ARGUMENT,
-        "The primary convolution algorithm failed memory allocation, "
-        "while a secondary algorithm is not provided.");
+        absl::StrCat(
+            "The primary convolution algorithm failed memory allocation, "
+            "while a secondary algorithm is not provided. Actual error: ",
+            scratch_or.status().ToString()));
   }
 
   SE_ASSIGN_OR_RETURN(use_tensor_ops,
@@ -3202,32 +3201,57 @@ struct RnnDoFP32ComputationFP16Input {
 namespace {
 
 #if CUDNN_VERSION >= 8100 && TF_ENABLE_CUDNN_FRONTEND
-bool IsNonDeterministic(cudnnBackendDescriptor_t engine_config) {
-  return cudnn_frontend::hasNumericalNote<
-      CUDNN_NUMERICAL_NOTE_NONDETERMINISTIC>(engine_config);
-}
 
-bool IsWinograd(cudnnBackendDescriptor_t engine_config) {
-  return cudnn_frontend::hasNumericalNote<CUDNN_NUMERICAL_NOTE_WINOGRAD>(
-      engine_config);
-}
-
-bool IsDownConvertingInputs(cudnnBackendDescriptor_t engine_config) {
-  if (CudnnEnvVar<WinogradNonfused>::IsEnabled()) {
-    return cudnn_frontend::hasNumericalNote<
-        CUDNN_NUMERICAL_NOTE_DOWN_CONVERT_INPUTS>(engine_config);
-  } else {
-    return IsWinograd(engine_config) ||
-           cudnn_frontend::hasNumericalNote<
-               CUDNN_NUMERICAL_NOTE_DOWN_CONVERT_INPUTS>(engine_config);
+absl::optional<int64_t> GetEngineId(cudnnBackendDescriptor_t engine_config) {
+  int64_t count;
+  int64_t engine_id;
+  cudnn_frontend::ManagedOpaqueDescriptor managed_engine =
+      cudnn_frontend::make_shared_backend_pointer(
+          CUDNN_BACKEND_ENGINE_DESCRIPTOR);
+  cudnnBackendDescriptor_t engine = managed_engine->get_backend_descriptor();
+  if (cudnnBackendGetAttribute(engine_config, CUDNN_ATTR_ENGINECFG_ENGINE,
+                               CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &count,
+                               &engine) != CUDNN_STATUS_SUCCESS) {
+    return absl::nullopt;
   }
+  if (cudnnBackendGetAttribute(engine, CUDNN_ATTR_ENGINE_GLOBAL_INDEX,
+                               CUDNN_TYPE_INT64, 1, &count,
+                               &engine_id) != CUDNN_STATUS_SUCCESS) {
+    return absl::nullopt;
+  }
+  return engine_id;
 }
 
-bool IsNonDeterministicOrIsDownConverting(
-    cudnnBackendDescriptor_t engine_config) {
-  return IsNonDeterministic(engine_config) ||
-         IsDownConvertingInputs(engine_config);
+bool GenericEngineFilter(cudnnBackendDescriptor_t engine_config,
+                         bool disable_winograd, bool disable_nondeterminism,
+                         bool disable_tensor_core) {
+  bool ret = cudnn_frontend::hasNumericalNote<
+      CUDNN_NUMERICAL_NOTE_DOWN_CONVERT_INPUTS>(engine_config);
+
+  if (disable_winograd) {
+    ret |= cudnn_frontend::hasNumericalNote<CUDNN_NUMERICAL_NOTE_WINOGRAD>(
+        engine_config);
+  }
+
+  if (disable_nondeterminism) {
+    ret |=
+        cudnn_frontend::hasNumericalNote<CUDNN_NUMERICAL_NOTE_NONDETERMINISTIC>(
+            engine_config);
+  }
+
+  if (disable_tensor_core) {
+    ret |= cudnn_frontend::hasNumericalNote<CUDNN_NUMERICAL_NOTE_TENSOR_CORE>(
+        engine_config);
+  }
+
+  auto maybe_engine_id = GetEngineId(engine_config);
+  if (maybe_engine_id.has_value()) {
+    ret |= *maybe_engine_id == 0;
+  }
+
+  return ret;
 }
+
 #endif  // CUDNN_VERSION >= 8100 && TF_ENABLE_CUDNN_FRONTEND
 
 }  // namespace
@@ -3261,6 +3285,12 @@ dnn::DataType GetConvAccumulatorType(dnn::DataType data_type) {
     case dnn::DataType::kInt8:
     case dnn::DataType::kInt32:
       return dnn::DataType::kInt32;
+#if CUDNN_VERSION >= 8200
+    case dnn::DataType::kBF16:
+      return CudnnEnvVar<ConvDoFP32ComputationFP16Input>::IsEnabled()
+                 ? dnn::DataType::kFloat
+                 : dnn::DataType::kBF16;
+#endif
     default:
       LOG(FATAL) << "Invalid DNN data type: " << static_cast<int>(data_type);
   }
@@ -3753,6 +3783,7 @@ GetCudnnFusedOperationGraph(
 
 port::StatusOr<std::unique_ptr<cudnn_frontend::ExecutionPlan>>
 GetFirstWorkingExecutionPlan(
+    Stream* stream, dnn::DataType element_type,
     const std::unique_ptr<cudnn_frontend::OperationGraph>& op_graph,
     dnn::ConvolutionKind kind, CudnnHandle& cudnn,
     ScratchAllocator* scratch_allocator) {
@@ -3769,22 +3800,27 @@ GetFirstWorkingExecutionPlan(
                       .build();
   RETURN_MSG_IF_CUDNN_ERROR(fallback);
 
-  auto engine_count = heuristics.getEngineConfigCount();
+  // cuDNN frontend sneakily puts error messages on the object and returns
+  // partially-initialized results when there's an error; make sure to check
+  // them.
+  int64_t engine_count = heuristics.getEngineConfigCount();
+  RETURN_MSG_IF_CUDNN_ERROR(heuristics);
   auto& engine_config = heuristics.getEngineConfig(engine_count);
+  RETURN_MSG_IF_CUDNN_ERROR(heuristics);
+
   auto& fallback_list = fallback.getFallbackList();
 
   cudnn_frontend::EngineConfigList filtered_configs;
-  if (RequireCudnnDeterminism()) {
-    cudnn_frontend::filter(engine_config, filtered_configs,
-                           IsNonDeterministicOrIsDownConverting);
-    cudnn_frontend::filter(fallback_list, filtered_configs,
-                           IsNonDeterministicOrIsDownConverting);
-  } else {
-    cudnn_frontend::filter(engine_config, filtered_configs,
-                           IsDownConvertingInputs);
-    cudnn_frontend::filter(fallback_list, filtered_configs,
-                           IsDownConvertingInputs);
-  }
+  auto generic_filter_fn = [=](cudnnBackendDescriptor_t engine_config) -> bool {
+    return GenericEngineFilter(
+        engine_config,
+        /*disable_winograd*/ !CudnnEnvVar<WinogradNonfused>::IsEnabled(),
+        /*disable_nondeterminism*/ RequireCudnnDeterminism(),
+        /*disable_tensor_core*/ !IsTensorMathEnabled(stream, element_type));
+  };
+
+  cudnn_frontend::filter(engine_config, filtered_configs, generic_filter_fn);
+  cudnn_frontend::filter(fallback_list, filtered_configs, generic_filter_fn);
 
   for (int i = 0; i < filtered_configs.size(); i++) {
     auto plan = cudnn_frontend::ExecutionPlanBuilder()
@@ -3934,9 +3970,7 @@ port::Status CudnnSupport::DoConvolve(
     return port::Status::OK();
   };
 
-  auto get_bwd_data_bugs = [&]() -> port::Status {
-    return port::Status::OK();
-  };
+  auto get_bwd_data_bugs = [&]() -> port::Status { return port::Status::OK(); };
 
   const auto get_bwd_filter_bugs = [&]() -> port::Status {
     return port::Status::OK();
@@ -4036,9 +4070,9 @@ port::Status CudnnSupport::DoConvolveWithExecutionPlan(
                                filter_descriptor, output_descriptor,
                                convolution_descriptor, cudnn));
 
-    SE_ASSIGN_OR_RETURN(
-        current_plan,
-        GetFirstWorkingExecutionPlan(op_graph, kind, cudnn, scratch_allocator));
+    SE_ASSIGN_OR_RETURN(current_plan, GetFirstWorkingExecutionPlan(
+                                          stream, element_type, op_graph, kind,
+                                          cudnn, scratch_allocator));
   }
 
   size_t workspace_size = 0;
@@ -4242,7 +4276,8 @@ port::Status CudnnSupport::DoFusedConvolveImpl(
 }
 
 port::Status CudnnSupport::DoFusedConvolveWithExecutionPlanImpl(
-    Stream* stream, const dnn::BatchDescriptor& conv_input_descriptor,
+    Stream* stream, dnn::DataType element_type,
+    const dnn::BatchDescriptor& conv_input_descriptor,
     DeviceMemoryBase conv_input_data, double conv_input_scale,
     const dnn::FilterDescriptor& filter_descriptor,
     DeviceMemoryBase filter_data,
@@ -4270,10 +4305,10 @@ port::Status CudnnSupport::DoFusedConvolveWithExecutionPlanImpl(
             side_input_scale, stream, conv_input_descriptor, filter_descriptor,
             bias_descriptor, output_descriptor, convolution_descriptor, cudnn));
 
-    SE_ASSIGN_OR_RETURN(
-        current_plan,
-        GetFirstWorkingExecutionPlan(op_graph, dnn::ConvolutionKind::FORWARD,
-                                     cudnn, scratch_allocator));
+    SE_ASSIGN_OR_RETURN(current_plan, GetFirstWorkingExecutionPlan(
+                                          stream, element_type, op_graph,
+                                          dnn::ConvolutionKind::FORWARD, cudnn,
+                                          scratch_allocator));
   }
 
   size_t workspace_size = 0;
@@ -4390,24 +4425,30 @@ bool CudnnSupport::GetConvolveExecutionPlans(
                       .build();
   RETURN_FALSE_IF_CUDNN_ERROR(fallback);
 
-  auto& heur_configs = heur.getEngineConfig(heur.getEngineConfigCount());
+  // cuDNN frontend sneakily puts error messages on the object and returns
+  // partially-initialized results when there's an error; make sure to check
+  // them.
+  int64_t engine_count = heur.getEngineConfigCount();
+  RETURN_FALSE_IF_CUDNN_ERROR(heur);
+  auto& heur_configs = heur.getEngineConfig(engine_count);
+  RETURN_FALSE_IF_CUDNN_ERROR(heur);
+
   auto& fallback_configs = fallback.getFallbackList();
 
   VLOG(4) << "\nHeuristics engine configs size: " << heur_configs.size()
           << "\nFallback engine configs size: " << fallback_configs.size();
 
   cudnn_frontend::EngineConfigList filtered_configs;
-  if (RequireCudnnDeterminism()) {
-    cudnn_frontend::filter(heur_configs, filtered_configs,
-                           IsNonDeterministicOrIsDownConverting);
-    cudnn_frontend::filter(fallback_configs, filtered_configs,
-                           IsNonDeterministicOrIsDownConverting);
-  } else {
-    cudnn_frontend::filter(heur_configs, filtered_configs,
-                           IsDownConvertingInputs);
-    cudnn_frontend::filter(fallback_configs, filtered_configs,
-                           IsDownConvertingInputs);
-  }
+  auto generic_filter_fn = [=](cudnnBackendDescriptor_t engine_config) -> bool {
+    return GenericEngineFilter(
+        engine_config,
+        /*disable_winograd*/ !CudnnEnvVar<WinogradNonfused>::IsEnabled(),
+        /*disable_nondeterminism*/ RequireCudnnDeterminism(),
+        /*disable_tensor_core*/ !IsTensorMathEnabled(stream, element_type));
+  };
+
+  cudnn_frontend::filter(heur_configs, filtered_configs, generic_filter_fn);
+  cudnn_frontend::filter(fallback_configs, filtered_configs, generic_filter_fn);
 
   VLOG(4) << "\nFiltered engine configs size: " << filtered_configs.size();
 
@@ -4468,24 +4509,30 @@ port::Status CudnnSupport::GetFusedConvolveExecutionPlans(
           .build();
   RETURN_MSG_IF_CUDNN_ERROR(fallback);
 
-  auto& heur_configs = heur.getEngineConfig(heur.getEngineConfigCount());
+  // cuDNN frontend sneakily puts error messages on the object and returns
+  // partially-initialized results when there's an error; make sure to check
+  // them.
+  int64_t engine_count = heur.getEngineConfigCount();
+  RETURN_MSG_IF_CUDNN_ERROR(heur);
+  auto& heur_configs = heur.getEngineConfig(engine_count);
+  RETURN_MSG_IF_CUDNN_ERROR(heur);
+
   auto& fallback_configs = fallback.getFallbackList();
 
   VLOG(4) << "\nHeuristics engine configs size: " << heur_configs.size()
           << "\nFallback engine configs size: " << fallback_configs.size();
 
   cudnn_frontend::EngineConfigList filtered_configs;
-  if (RequireCudnnDeterminism()) {
-    cudnn_frontend::filter(heur_configs, filtered_configs,
-                           IsNonDeterministicOrIsDownConverting);
-    cudnn_frontend::filter(fallback_configs, filtered_configs,
-                           IsNonDeterministicOrIsDownConverting);
-  } else {
-    cudnn_frontend::filter(heur_configs, filtered_configs,
-                           IsDownConvertingInputs);
-    cudnn_frontend::filter(fallback_configs, filtered_configs,
-                           IsDownConvertingInputs);
-  }
+  auto generic_filter_fn = [=](cudnnBackendDescriptor_t engine_config) -> bool {
+    return GenericEngineFilter(
+        engine_config,
+        /*disable_winograd*/ !CudnnEnvVar<WinogradNonfused>::IsEnabled(),
+        /*disable_nondeterminism*/ RequireCudnnDeterminism(),
+        /*disable_tensor_core*/ !IsTensorMathEnabled(stream, element_type));
+  };
+
+  cudnn_frontend::filter(heur_configs, filtered_configs, generic_filter_fn);
+  cudnn_frontend::filter(fallback_configs, filtered_configs, generic_filter_fn);
 
   VLOG(4) << "\nFiltered engine configs size: " << filtered_configs.size();
 
@@ -5046,11 +5093,12 @@ port::Status CudnnSupport::DoFusedConvolveWithExecutionPlan(
     const dnn::AlgorithmConfig& algorithm_config,
     dnn::ProfileResult* output_profile_result) {
   return DoFusedConvolveWithExecutionPlanImpl(
-      stream, conv_input_descriptor, conv_input_data, conv_input_scale,
-      filter_descriptor, filter_data, convolution_descriptor, side_input_data,
-      side_input_scale, bias_descriptor, biases, activation_mode,
-      output_descriptor, output_data, GetConvAccumulatorType(element_type),
-      scratch_allocator, algorithm_config, output_profile_result);
+      stream, element_type, conv_input_descriptor, conv_input_data,
+      conv_input_scale, filter_descriptor, filter_data, convolution_descriptor,
+      side_input_data, side_input_scale, bias_descriptor, biases,
+      activation_mode, output_descriptor, output_data,
+      GetConvAccumulatorType(element_type), scratch_allocator, algorithm_config,
+      output_profile_result);
 }
 
 port::Status CudnnSupport::DoPrepareForCtcLoss(
@@ -5169,61 +5217,6 @@ bool CudnnSupport::DoTransformTensor(Stream* stream,
     return port::Status::OK();
   }();
   return IsStatusOk(status, /*report_error=*/true);
-}
-
-template <class T>
-port::Status CudnnSupport::DoConvolveBackwardBiasImpl(
-    Stream* stream, const dnn::BatchDescriptor& input_descriptor,
-    const DeviceMemory<T>& input_data,
-    const dnn::BatchDescriptor& bias_descriptor,
-    DeviceMemory<T>* backward_bias_data) {
-  cudnnDataType_t cudnn_type = GetCudnnDataType<T>();
-  CudnnTensorDescriptor input_nd(input_descriptor, cudnn_type);
-  CudnnTensorDescriptor bias_nd(bias_descriptor, cudnn_type);
-
-  // Alpha is the scaling factor for input.
-  float alpha = 1.0;
-  // Beta is the scaling factor for output.
-  float beta = 0.0;
-
-  auto cudnn = cudnn_->GetHandle(parent_, stream);
-  RETURN_IF_CUDNN_ERROR(cudnnConvolutionBackwardBias(
-      cudnn.handle(), &alpha, input_nd.handle(), input_data.opaque(), &beta,
-      bias_nd.handle(), backward_bias_data->opaque()));
-  return port::Status::OK();
-}
-
-bool CudnnSupport::DoConvolveBackwardBias(
-    Stream* stream, const dnn::BatchDescriptor& input_descriptor,
-    const DeviceMemory<double>& input_data,
-    const dnn::BatchDescriptor& bias_descriptor,
-    DeviceMemory<double>* backward_bias_data) {
-  return IsStatusOk(
-      DoConvolveBackwardBiasImpl(stream, input_descriptor, input_data,
-                                 bias_descriptor, backward_bias_data),
-      /*report_error=*/true);
-}
-
-bool CudnnSupport::DoConvolveBackwardBias(
-    Stream* stream, const dnn::BatchDescriptor& input_descriptor,
-    const DeviceMemory<float>& input_data,
-    const dnn::BatchDescriptor& bias_descriptor,
-    DeviceMemory<float>* backward_bias_data) {
-  return IsStatusOk(
-      DoConvolveBackwardBiasImpl(stream, input_descriptor, input_data,
-                                 bias_descriptor, backward_bias_data),
-      /*report_error=*/true);
-}
-
-bool CudnnSupport::DoConvolveBackwardBias(
-    Stream* stream, const dnn::BatchDescriptor& input_descriptor,
-    const DeviceMemory<Eigen::half>& input_data,
-    const dnn::BatchDescriptor& bias_descriptor,
-    DeviceMemory<Eigen::half>* backward_bias_data) {
-  return IsStatusOk(
-      DoConvolveBackwardBiasImpl(stream, input_descriptor, input_data,
-                                 bias_descriptor, backward_bias_data),
-      /*report_error=*/true);
 }
 
 bool CudnnSupport::DoMatMul(Stream* stream,

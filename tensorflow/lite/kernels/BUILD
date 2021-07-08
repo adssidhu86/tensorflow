@@ -555,6 +555,7 @@ BUILTIN_KERNEL_SRCS = [
     "batch_to_space_nd.cc",
     "bidirectional_sequence_lstm.cc",
     "bidirectional_sequence_rnn.cc",
+    "broadcast_args.cc",
     "broadcast_to.cc",
     "call_once.cc",
     "cast.cc",
@@ -786,6 +787,7 @@ cc_library(
         "pooling3d.cc",
         "random_standard_normal.cc",
         "random_uniform.cc",
+        "roll.cc",
         "sign.cc",
         "unidirectional_sequence_gru.cc",
     ],
@@ -1084,6 +1086,19 @@ cc_test(
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
         "@flatbuffers",
+    ],
+)
+
+cc_test(
+    name = "broadcast_args_test",
+    size = "small",
+    srcs = ["broadcast_args_test.cc"],
+    deps = [
+        ":builtin_ops",
+        ":test_main",
+        ":test_util",
+        "//tensorflow/lite:framework",
+        "@com_google_googletest//:gtest",
     ],
 )
 
@@ -1505,6 +1520,21 @@ cc_test(
         ":custom_ops",
         ":test_main",
         ":test_util",
+        "//tensorflow/lite/schema:schema_fbs",
+        "//tensorflow/lite/testing:util",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+cc_test(
+    name = "roll_test",
+    size = "small",
+    srcs = ["roll_test.cc"],
+    deps = [
+        ":custom_ops",
+        ":test_main",
+        ":test_util",
+        "//tensorflow/lite/kernels/internal:types",
         "//tensorflow/lite/schema:schema_fbs",
         "//tensorflow/lite/testing:util",
         "@com_google_googletest//:gtest",

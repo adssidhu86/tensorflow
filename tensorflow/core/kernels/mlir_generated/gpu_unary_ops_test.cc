@@ -817,6 +817,26 @@ GENERATE_DEFAULT_TEST(Rsqrt, DT_DOUBLE, DT_DOUBLE, baseline_rsqrt,
 GENERATE_DEFAULT_TEST_2(Rsqrt, DT_HALF, DT_FLOAT, DT_HALF, DT_FLOAT,
                         baseline_rsqrt, test::OpsTestConfig())
 
+/// Test `tf.Selu`.
+
+template <typename T>
+T baseline_selu(T x) {
+  const double scale = 1.0507009873554804934193349852946;
+  if (x > 0) return scale * x;
+
+  const double scaled_alpha = 1.7580993408473768599402175208123;
+  return scaled_alpha * (std::exp(x) - 1);
+}
+
+GENERATE_DEFAULT_TEST(Selu, DT_FLOAT, DT_FLOAT, baseline_selu,
+                      test::OpsTestConfig())
+
+GENERATE_DEFAULT_TEST(Selu, DT_DOUBLE, DT_DOUBLE, baseline_selu,
+                      test::OpsTestConfig())
+
+GENERATE_DEFAULT_TEST_2(Selu, DT_HALF, DT_FLOAT, DT_HALF, DT_FLOAT,
+                        baseline_selu, test::OpsTestConfig())
+
 /// Test `tf.Sign`.
 
 // Reference implementation
@@ -877,6 +897,28 @@ GENERATE_DEFAULT_TEST(Sinh, DT_FLOAT, DT_FLOAT, std::sinh,
                       test::OpsTestConfig())
 
 GENERATE_DEFAULT_TEST(Sinh, DT_DOUBLE, DT_DOUBLE, std::sinh,
+                      test::OpsTestConfig())
+
+/// Test `tf.Softplus`.
+
+// Reference implementation
+template <typename T>
+T baseline_softplus(T x) {
+  T epsilon = std::numeric_limits<T>::epsilon();
+  T threshold = 2 + std::log(epsilon);
+  if (x > -threshold && x < threshold) {
+    return std::exp(x);
+  }
+  return std::log1p(std::exp(x));
+}
+
+GENERATE_DEFAULT_TEST_2(Softplus, DT_HALF, DT_FLOAT, DT_HALF, DT_FLOAT,
+                        baseline_softplus, test::OpsTestConfig())
+
+GENERATE_DEFAULT_TEST(Softplus, DT_FLOAT, DT_FLOAT, baseline_softplus,
+                      test::OpsTestConfig())
+
+GENERATE_DEFAULT_TEST(Softplus, DT_DOUBLE, DT_DOUBLE, baseline_softplus,
                       test::OpsTestConfig())
 
 /// Test `tf.Sqrt`.
@@ -947,6 +989,24 @@ GENERATE_DEFAULT_TEST(Square, DT_FLOAT, DT_FLOAT, baseline_square,
 GENERATE_DEFAULT_TEST(Square, DT_DOUBLE, DT_DOUBLE, baseline_square,
                       test::OpsTestConfig())
 GENERATE_DEFAULT_TEST(Square, DT_INT64, DT_INT64, baseline_square,
+                      test::OpsTestConfig().ExpectStrictlyEqual())
+
+/// Test `tf.ZerosLike`.
+
+template <typename T>
+T baseline_zeros_like(T /*inp*/) {
+  return T(0);
+}
+
+GENERATE_DEFAULT_TEST(ZerosLike, DT_BOOL, DT_BOOL, baseline_zeros_like,
+                      test::OpsTestConfig().ExpectStrictlyEqual())
+GENERATE_DEFAULT_TEST(ZerosLike, DT_HALF, DT_HALF, baseline_zeros_like,
+                      test::OpsTestConfig().ExpectStrictlyEqual())
+GENERATE_DEFAULT_TEST(ZerosLike, DT_FLOAT, DT_FLOAT, baseline_zeros_like,
+                      test::OpsTestConfig().ExpectStrictlyEqual())
+GENERATE_DEFAULT_TEST(ZerosLike, DT_DOUBLE, DT_DOUBLE, baseline_zeros_like,
+                      test::OpsTestConfig().ExpectStrictlyEqual())
+GENERATE_DEFAULT_TEST(ZerosLike, DT_INT64, DT_INT64, baseline_zeros_like,
                       test::OpsTestConfig().ExpectStrictlyEqual())
 
 }  // namespace
